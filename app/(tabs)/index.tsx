@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, ActivityIndicator } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { type TodoTask } from '../../lib/types';
 import TaskForm from '../../components/TaskForm';
@@ -18,16 +18,31 @@ const STATUS_LABEL: Record<string, string> = {
 
 const PRIORITY_LABEL = ['', '最低', '低', '中', '高', '最高'];
 
+// 優先度ごとの左ボーダー色と背景色
+const PRIORITY_STYLE: Record<number, { border: string; bg: string; badge: string }> = {
+  5: { border: '#ef4444', bg: '#1a0a0a', badge: '#ef4444' }, // 最高 - 赤
+  4: { border: '#f97316', bg: '#1a0f0a', badge: '#f97316' }, // 高   - オレンジ
+  3: { border: '#6366f1', bg: '#1a1a1a', badge: '#6366f1' }, // 中   - インディゴ
+  2: { border: '#22c55e', bg: '#0a1a0a', badge: '#22c55e' }, // 低   - 緑
+  1: { border: '#374151', bg: '#111111', badge: '#374151' }, // 最低 - グレー
+};
+
 function TaskCard({ task, onEdit, onDelete }: { task: TodoTask; onEdit: () => void; onDelete: () => void }) {
   const [confirmDel, setConfirmDel] = useState(false);
+  const ps = PRIORITY_STYLE[task.priority] ?? PRIORITY_STYLE[3];
 
   return (
-    <View style={s.card}>
+    <View style={[s.card, { backgroundColor: ps.bg, borderLeftColor: ps.border }]}>
       <View style={s.cardHeader}>
-        <View style={[s.statusBadge, { borderColor: STATUS_COLOR[task.status] }]}>
-          <Text style={[s.statusText, { color: STATUS_COLOR[task.status] }]}>
-            {STATUS_LABEL[task.status]}
-          </Text>
+        <View style={s.badgeRow}>
+          <View style={[s.priorityBadge, { backgroundColor: ps.border }]}>
+            <Text style={s.priorityBadgeTxt}>{PRIORITY_LABEL[task.priority]}</Text>
+          </View>
+          <View style={[s.statusBadge, { borderColor: STATUS_COLOR[task.status] }]}>
+            <Text style={[s.statusText, { color: STATUS_COLOR[task.status] }]}>
+              {STATUS_LABEL[task.status]}
+            </Text>
+          </View>
         </View>
         <View style={s.cardActions}>
           <TouchableOpacity style={s.editBtn} onPress={onEdit}>
@@ -89,17 +104,18 @@ export default function TodayScreen() {
   const [showAdd, setShowAdd] = useState(false);
   const [editTarget, setEditTarget] = useState<TodoTask | null>(null);
   const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // 今日の日付
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
   const loadTasks = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('todo_tasks')
       .select('*')
       .eq('date', todayStr)
       .order('priority', { ascending: false });
+    if (error) setErrorMsg(error.message);
     if (data) setTasks(data as TodoTask[]);
     setLoading(false);
   }, [todayStr]);
@@ -108,30 +124,47 @@ export default function TodayScreen() {
 
   const handleAdd = async (task: TodoTask) => {
     setSaving(true);
+    setErrorMsg(null);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setSaving(false); return; }
+    if (!user) {
+      setErrorMsg('ログインが必要です。ページを再読み込みしてください。');
+      setSaving(false);
+      return;
+    }
     const { error } = await supabase.from('todo_tasks').insert({ ...task, user_id: user.id });
-    if (error) Alert.alert('エラー', error.message);
-    else { setShowAdd(false); loadTasks(); }
+    if (error) {
+      setErrorMsg(`保存エラー: ${error.message}`);
+    } else {
+      setShowAdd(false);
+      loadTasks();
+    }
     setSaving(false);
   };
 
   const handleEdit = async (task: TodoTask) => {
     setSaving(true);
+    setErrorMsg(null);
     const { error } = await supabase.from('todo_tasks').update({
       title: task.title, description: task.description, leverage: task.leverage,
       priority: task.priority, status: task.status,
       achieve_reason: task.achieve_reason, fail_reason: task.fail_reason,
       due_date: task.due_date,
+      deadline_time: task.deadline_time,
+      estimated_minutes: task.estimated_minutes,
     }).eq('id', task.id as string);
-    if (error) Alert.alert('エラー', error.message);
-    else { setEditTarget(null); loadTasks(); }
+    if (error) {
+      setErrorMsg(`更新エラー: ${error.message}`);
+    } else {
+      setEditTarget(null);
+      loadTasks();
+    }
     setSaving(false);
   };
 
   const handleDelete = async (task: TodoTask) => {
+    setErrorMsg(null);
     const { error } = await supabase.from('todo_tasks').delete().eq('id', task.id as string);
-    if (error) Alert.alert('エラー', error.message);
+    if (error) setErrorMsg(`削除エラー: ${error.message}`);
     else loadTasks();
   };
 
@@ -155,6 +188,15 @@ export default function TodayScreen() {
             <Text style={s.logoutTxt}>ログアウト</Text>
           </TouchableOpacity>
         </View>
+
+        {errorMsg && (
+          <View style={s.errorBanner}>
+            <Text style={s.errorText}>❌ {errorMsg}</Text>
+            <TouchableOpacity onPress={() => setErrorMsg(null)}>
+              <Text style={s.errorClose}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {tasks.length === 0 && (
           <Text style={s.empty}>今日のタスクはまだありません</Text>
@@ -220,12 +262,18 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0f0f0f' },
   content: { padding: 20, paddingBottom: 100 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
+  errorBanner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#2a0a0a', borderRadius: 10, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#ef4444' },
+  errorText: { color: '#ef4444', fontSize: 13, flex: 1 },
+  errorClose: { color: '#ef4444', fontSize: 16, paddingLeft: 8 },
   dateText: { color: '#6366f1', fontSize: 14, fontWeight: '700', marginBottom: 2 },
   summaryText: { color: '#555', fontSize: 13 },
   logoutTxt: { color: '#444', fontSize: 13, marginTop: 4 },
   empty: { color: '#555', textAlign: 'center', marginTop: 60, fontSize: 15 },
-  card: { backgroundColor: '#1a1a1a', borderRadius: 16, padding: 16, marginBottom: 12 },
+  card: { borderRadius: 16, padding: 16, marginBottom: 12, borderLeftWidth: 4 },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  badgeRow: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  priorityBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  priorityBadgeTxt: { color: '#fff', fontSize: 11, fontWeight: '700' },
   statusBadge: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 3 },
   statusText: { fontSize: 12, fontWeight: '600' },
   cardActions: { flexDirection: 'row', gap: 8, alignItems: 'center' },
