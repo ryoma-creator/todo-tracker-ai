@@ -32,6 +32,29 @@ const QUICK_QUESTIONS = [
   '今の自分にとって最優先事項は？',
 ];
 
+// condition_logsからコンディションデータを取得
+async function fetchConditionContext(limit = 30) {
+  const { data } = await supabase
+    .from('condition_logs')
+    .select('date, sleep_hours, sleep_quality, fatigue, focus, mood, study_hours, memo')
+    .order('date', { ascending: false })
+    .limit(limit);
+
+  if (!data || data.length === 0) return null;
+
+  return data.map((c) => {
+    const parts = [
+      `[${c.date}] 睡眠${c.sleep_hours}h(質${c.sleep_quality})`,
+      `疲労${c.fatigue}`,
+      `集中${c.focus}`,
+      c.mood != null ? `気分${c.mood}` : null,
+      c.study_hours ? `学習${c.study_hours}h` : null,
+      c.memo ? `メモ:${c.memo}` : null,
+    ].filter(Boolean);
+    return parts.join(' ');
+  }).join('\n');
+}
+
 // 過去タスクを文字列に変換してAIに渡す
 async function fetchTaskContext(limit = 30) {
   const { data } = await supabase
@@ -58,26 +81,46 @@ function DiagnosisTab() {
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [step, setStep] = useState('');
 
   const runDiagnosis = async () => {
     setLoading(true);
-    const context = await fetchTaskContext(30);
+    setStep('タスクデータを取得中...');
 
-    if (!context) {
-      setDiagnosis({ alerts: [], priority: '', summary: '記録が少なすぎます。数日タスクを記録すると分析できます。' });
-      setLoading(false);
-      setDone(true);
-      return;
-    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{
-        role: 'system',
-        content: `あなたはタスク管理・生産性の専門コーチ。以下のタスク記録からパターン・傾向を分析し、改善提案をしてください。
+    try {
+      const [taskContext, conditionContext] = await Promise.all([
+        fetchTaskContext(30),
+        fetchConditionContext(30),
+      ]);
 
-データ：
-${context}
+      if (!taskContext) {
+        setDiagnosis({ alerts: [], priority: '', summary: '記録が少なすぎます。数日タスクを記録すると分析できます。' });
+        setDone(true);
+        return;
+      }
+
+      const recordCount = taskContext.split('\n').length;
+      setStep(`${recordCount}件のタスク + コンディションデータをAIに送信中...`);
+      await new Promise((r) => setTimeout(r, 300));
+      setStep('AIが分析中... (通常15〜30秒)');
+
+      const conditionSection = conditionContext
+        ? `\n\n【コンディション記録（condition-tracker連携）】\n${conditionContext}`
+        : '';
+
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'system',
+          content: `あなたはタスク管理・生産性の専門コーチ。以下のデータからパターン・傾向を分析し、改善提案をしてください。
+
+【タスク記録】
+${taskContext}${conditionSection}
+
+コンディションデータがある場合は「睡眠時間とタスク達成率の相関」「疲労度が高い日の傾向」なども分析してください。
 
 以下のJSON形式のみで返してください：
 {
@@ -85,32 +128,41 @@ ${context}
     {
       "level": "danger" | "warning" | "good",
       "title": "タイトル（15字以内）",
-      "detail": "具体的な分析（例：優先度4以上のタスクの達成率が30%と低い。高優先度の理由を再検討する必要がある）"
+      "detail": "具体的な分析（数値・相関を含む）"
     }
   ],
   "priority": "今すぐ取り組むべき最優先事項（具体的に、1-2文）",
   "summary": "全体の傾向まとめ（40字以内）"
 }
 
-danger: 今すぐ対処が必要
-warning: 注意が必要な傾向
-good: うまくいっている点
+danger: 今すぐ対処が必要 / warning: 注意が必要 / good: うまくいっている点
+アラートは最大5個。`,
+        }],
+        // @ts-expect-error signal はSDKの型定義にないが fetch レベルで有効
+        signal: controller.signal,
+      });
 
-アラートは最大5個。データから読み取れる具体的な数値や相関を示すこと。`,
-      }],
-    });
-
-    try {
+      setStep('結果を整形中...');
       const content = response.choices[0].message.content ?? '{}';
       const match = content.match(/\{[\s\S]*\}/);
       const parsed = JSON.parse(match ? match[0] : content) as Diagnosis;
       setDiagnosis(parsed);
-    } catch {
-      setDiagnosis({ alerts: [], priority: '', summary: '分析に失敗しました。再度お試しください。' });
-    }
+      setDone(true);
 
-    setLoading(false);
-    setDone(true);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '不明なエラー';
+      const isTimeout = msg.includes('abort') || msg.includes('AbortError');
+      setDiagnosis({
+        alerts: [],
+        priority: '',
+        summary: isTimeout ? 'タイムアウト（60秒）。ネット接続を確認して再試行してください。' : `エラー: ${msg}`,
+      });
+      setDone(true);
+    } finally {
+      clearTimeout(timeout);
+      setLoading(false);
+      setStep('');
+    }
   };
 
   return (
@@ -123,6 +175,12 @@ good: うまくいっている点
           ? <ActivityIndicator color="#fff" />
           : <Text style={t.diagBtnTxt}>{done ? '再分析する' : '分析する'}</Text>}
       </TouchableOpacity>
+
+      {loading && step ? (
+        <View style={t.stepBox}>
+          <Text style={t.stepText}>{step}</Text>
+        </View>
+      ) : null}
 
       {diagnosis && (
         <View style={t.result}>
@@ -169,7 +227,14 @@ function ChatTab() {
     const newMessages: Message[] = [...messages, { role: 'user', content: text }];
     setMessages(newMessages);
 
-    const context = await fetchTaskContext(14);
+    const [taskContext, conditionContext] = await Promise.all([
+      fetchTaskContext(14),
+      fetchConditionContext(14),
+    ]);
+
+    const conditionSection = conditionContext
+      ? `\n\n【コンディション記録】\n${conditionContext}`
+      : '';
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -177,11 +242,11 @@ function ChatTab() {
         {
           role: 'system',
           content: `あなたはRyomaの生産性コーチ。
-過去14日のタスク記録：
-${context ?? 'まだ記録がありません'}
+【過去14日のタスク記録】
+${taskContext ?? 'まだ記録がありません'}${conditionSection}
 
 ・日本語・短く端的に答える
-・データに基づいた具体的なアドバイスを提供する
+・コンディションとタスク達成の相関も踏まえてアドバイスする
 ・記録が少ない場合は「記録を続けると分析できます」と伝える`,
         },
         ...newMessages,
@@ -270,8 +335,10 @@ const t = StyleSheet.create({
   tabInner: { padding: 24, paddingBottom: 48 },
   diagTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 6 },
   diagSub: { fontSize: 13, color: '#555', marginBottom: 24, lineHeight: 20 },
-  diagBtn: { backgroundColor: '#6366f1', borderRadius: 12, padding: 14, alignItems: 'center', marginBottom: 28 },
+  diagBtn: { backgroundColor: '#6366f1', borderRadius: 12, padding: 14, alignItems: 'center', marginBottom: 16 },
   diagBtnTxt: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  stepBox: { backgroundColor: '#1a1a2e', borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#2d2d4e', alignItems: 'center' },
+  stepText: { color: '#a5b4fc', fontSize: 13, textAlign: 'center' },
   result: { gap: 12 },
   priorityBox: { backgroundColor: '#1e1b4b', borderRadius: 12, padding: 16, borderLeftWidth: 3, borderLeftColor: '#6366f1' },
   priorityLabel: { color: '#6366f1', fontSize: 11, fontWeight: '700', marginBottom: 6 },
