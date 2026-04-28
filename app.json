@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Todo Tracker",
+    "slug": "todo-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ryoma.todotracker"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0f0f0f"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.ryoma.todotracker"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "scheme": "todo-tracker",
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ]
+  }
+}
