@@ -61,7 +61,16 @@ function TaskCard({ task, onEdit, onDelete }: { task: TodoTask; onEdit: () => vo
 
       <View style={s.cardFooter}>
         <Text style={s.priorityTxt}>優先度: {PRIORITY_LABEL[task.priority]}</Text>
-        {task.due_date ? <Text style={s.dueTxt}>期限: {task.due_date}</Text> : null}
+        {task.deadline_time ? (
+          <Text style={s.deadlineTxt}>⏰ {task.deadline_time}まで</Text>
+        ) : task.due_date ? (
+          <Text style={s.dueTxt}>期限: {task.due_date}</Text>
+        ) : null}
+        {task.estimated_minutes ? (
+          <Text style={s.estimatedTxt}>
+            {task.estimated_minutes >= 60 ? `${task.estimated_minutes / 60}h` : `${task.estimated_minutes}m`}
+          </Text>
+        ) : null}
       </View>
 
       {task.status === 'done' && task.achieve_reason ? (
@@ -234,7 +243,9 @@ const s = StyleSheet.create({
   leverageText: { color: '#9ca3af', fontSize: 13, lineHeight: 20 },
   cardFooter: { flexDirection: 'row', gap: 16 },
   priorityTxt: { color: '#555', fontSize: 12 },
+  deadlineTxt: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
   dueTxt: { color: '#f59e0b', fontSize: 12 },
+  estimatedTxt: { color: '#6b7280', fontSize: 12 },
   reasonTxt: { color: '#4ade80', fontSize: 13, marginTop: 8, lineHeight: 20 },
   failReason: { color: '#f87171' },
   addBtn: { position: 'absolute', bottom: 24, left: 20, right: 20, backgroundColor: '#6366f1', borderRadius: 14, padding: 18, alignItems: 'center' },

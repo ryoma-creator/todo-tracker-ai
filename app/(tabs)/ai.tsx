@@ -12,7 +12,9 @@ type AlertLevel = 'danger' | 'warning' | 'good';
 type DiagAlert = { level: AlertLevel; title: string; detail: string };
 type Diagnosis = { alerts: DiagAlert[]; priority: string; summary: string };
 type Message = { role: 'user' | 'assistant'; content: string };
-type Tab = 'diagnosis' | 'chat';
+type Tab = 'diagnosis' | 'schedule' | 'chat';
+type ScheduleItem = { time: string; task: string; duration: string; reason: string };
+type Schedule = { items: ScheduleItem[]; advice: string };
 
 const LEVEL_COLOR: Record<AlertLevel, string> = {
   danger: '#ef4444',
@@ -59,7 +61,7 @@ async function fetchConditionContext(limit = 30) {
 async function fetchTaskContext(limit = 30) {
   const { data } = await supabase
     .from('todo_tasks')
-    .select('date, title, leverage, priority, status, achieve_reason, fail_reason')
+    .select('date, title, leverage, priority, status, achieve_reason, fail_reason, deadline_time, estimated_minutes')
     .order('date', { ascending: false })
     .limit(limit);
 
@@ -72,8 +74,23 @@ async function fetchTaskContext(limit = 30) {
       : t.status === 'failed' && t.fail_reason
         ? ` 理由:${t.fail_reason}`
         : '';
-    return `[${t.date}] ${t.title}（優先度${t.priority}）→${statusStr}${reasonStr}${t.leverage ? ` レバレッジ:${t.leverage}` : ''}`;
+    const timeStr = t.deadline_time ? ` 締切:${t.deadline_time}` : '';
+    const estStr = t.estimated_minutes ? ` 所要:${t.estimated_minutes}分` : '';
+    return `[${t.date}] ${t.title}（優先度${t.priority}）→${statusStr}${reasonStr}${timeStr}${estStr}${t.leverage ? ` レバレッジ:${t.leverage}` : ''}`;
   }).join('\n');
+}
+
+// 今日の未着手タスクを取得してスケジュール提案に使う
+async function fetchTodayPendingTasks() {
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const { data } = await supabase
+    .from('todo_tasks')
+    .select('title, priority, deadline_time, estimated_minutes, leverage')
+    .eq('date', dateStr)
+    .eq('status', 'pending')
+    .order('priority', { ascending: false });
+  return data ?? [];
 }
 
 // パターン診断タブ
@@ -213,6 +230,129 @@ danger: 今すぐ対処が必要 / warning: 注意が必要 / good: うまくい
   );
 }
 
+// スケジュール提案タブ
+function ScheduleTab() {
+  const [schedule, setSchedule] = useState<Schedule | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [step, setStep] = useState('');
+
+  const runSchedule = async () => {
+    setLoading(true);
+    setStep('今日のタスクを取得中...');
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
+    try {
+      const [tasks, conditionContext] = await Promise.all([
+        fetchTodayPendingTasks(),
+        fetchConditionContext(3),
+      ]);
+
+      if (tasks.length === 0) {
+        setSchedule({ items: [], advice: '今日の未着手タスクがありません。タスクを追加してから実行してください。' });
+        return;
+      }
+
+      const taskList = tasks.map((t) => {
+        const parts = [`・${t.title}（優先度${t.priority}）`];
+        if (t.deadline_time) parts.push(`締切:${t.deadline_time}`);
+        if (t.estimated_minutes) parts.push(`所要:${t.estimated_minutes}分`);
+        if (t.leverage) parts.push(`価値:${t.leverage}`);
+        return parts.join(' ');
+      }).join('\n');
+
+      setStep(`${tasks.length}件のタスクを分析中...`);
+
+      const now = new Date();
+      const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'system',
+          content: `あなたは生産性コーチ。今日の残りタスクを最適な順番・時間割で組み立ててください。
+
+現在時刻: ${currentTime}
+
+【今日の未着手タスク】
+${taskList}
+
+${conditionContext ? `【直近のコンディション】\n${conditionContext}` : ''}
+
+以下のJSON形式のみで返してください：
+{
+  "items": [
+    {
+      "time": "開始時刻（例: 14:00）",
+      "task": "タスク名",
+      "duration": "所要時間（例: 30分）",
+      "reason": "この順番にした理由（10字以内）"
+    }
+  ],
+  "advice": "今日全体へのアドバイス（40字以内）"
+}
+
+優先度・締切・レバレッジ・コンディションを総合して最適な順番を決定すること。`,
+        }],
+        // @ts-expect-error signal はSDKの型定義にないが fetch レベルで有効
+        signal: controller.signal,
+      });
+
+      const content = response.choices[0].message.content ?? '{}';
+      const match = content.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : content) as Schedule;
+      setSchedule(parsed);
+
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '不明なエラー';
+      setSchedule({ items: [], advice: `エラー: ${msg}` });
+    } finally {
+      clearTimeout(timeout);
+      setLoading(false);
+      setStep('');
+    }
+  };
+
+  return (
+    <ScrollView style={t.tabContent} contentContainerStyle={t.tabInner}>
+      <Text style={t.diagTitle}>今日のスケジュール提案</Text>
+      <Text style={t.diagSub}>締切・優先度・レバレッジを元にAIが最適な時間割を組みます</Text>
+
+      <TouchableOpacity style={t.diagBtn} onPress={runSchedule} disabled={loading}>
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={t.diagBtnTxt}>スケジュールを生成</Text>}
+      </TouchableOpacity>
+
+      {loading && step ? (
+        <View style={t.stepBox}>
+          <Text style={t.stepText}>{step}</Text>
+        </View>
+      ) : null}
+
+      {schedule && (
+        <View style={t.result}>
+          {schedule.advice ? (
+            <View style={t.summaryBox}>
+              <Text style={t.summaryText}>{schedule.advice}</Text>
+            </View>
+          ) : null}
+
+          {schedule.items.map((item, i) => (
+            <View key={i} style={t.scheduleCard}>
+              <View style={t.scheduleHeader}>
+                <Text style={t.scheduleTime}>{item.time}</Text>
+                <Text style={t.scheduleDuration}>{item.duration}</Text>
+              </View>
+              <Text style={t.scheduleTask}>{item.task}</Text>
+              <Text style={t.scheduleReason}>{item.reason}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
 // チャットタブ
 function ChatTab() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -309,7 +449,13 @@ export default function AIScreen() {
           style={[t.tabBtn, tab === 'diagnosis' && t.tabBtnActive]}
           onPress={() => setTab('diagnosis')}
         >
-          <Text style={[t.tabBtnTxt, tab === 'diagnosis' && t.tabBtnTxtActive]}>パターン診断</Text>
+          <Text style={[t.tabBtnTxt, tab === 'diagnosis' && t.tabBtnTxtActive]}>パターン</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[t.tabBtn, tab === 'schedule' && t.tabBtnActive]}
+          onPress={() => setTab('schedule')}
+        >
+          <Text style={[t.tabBtnTxt, tab === 'schedule' && t.tabBtnTxtActive]}>時間割</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[t.tabBtn, tab === 'chat' && t.tabBtnActive]}
@@ -319,7 +465,9 @@ export default function AIScreen() {
         </TouchableOpacity>
       </View>
 
-      {tab === 'diagnosis' ? <DiagnosisTab /> : <ChatTab />}
+      {tab === 'diagnosis' && <DiagnosisTab />}
+      {tab === 'schedule' && <ScheduleTab />}
+      {tab === 'chat' && <ChatTab />}
     </View>
   );
 }
@@ -339,6 +487,12 @@ const t = StyleSheet.create({
   diagBtnTxt: { color: '#fff', fontSize: 15, fontWeight: '600' },
   stepBox: { backgroundColor: '#1a1a2e', borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#2d2d4e', alignItems: 'center' },
   stepText: { color: '#a5b4fc', fontSize: 13, textAlign: 'center' },
+  scheduleCard: { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16, borderLeftWidth: 3, borderLeftColor: '#6366f1' },
+  scheduleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  scheduleTime: { color: '#6366f1', fontSize: 18, fontWeight: '800' },
+  scheduleDuration: { color: '#555', fontSize: 12 },
+  scheduleTask: { color: '#fff', fontSize: 15, fontWeight: '600', marginBottom: 4 },
+  scheduleReason: { color: '#6b7280', fontSize: 12 },
   result: { gap: 12 },
   priorityBox: { backgroundColor: '#1e1b4b', borderRadius: 12, padding: 16, borderLeftWidth: 3, borderLeftColor: '#6366f1' },
   priorityLabel: { color: '#6366f1', fontSize: 11, fontWeight: '700', marginBottom: 6 },

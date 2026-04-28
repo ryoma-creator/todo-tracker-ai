@@ -11,7 +11,9 @@ create table if not exists public.todo_tasks (
   status      text not null default 'pending' check (status in ('pending', 'done', 'failed')),
   achieve_reason text not null default '',
   fail_reason    text not null default '',
-  due_date    date
+  due_date       date,
+  deadline_time  time,              -- 当日の締め切り時刻
+  estimated_minutes int             -- 想定所要時間（分）
 );
 
 -- RLS 有効化

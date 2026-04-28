@@ -13,6 +13,8 @@ export type TodoTask = {
   achieve_reason: string; // 達成できた理由
   fail_reason: string;    // 達成できなかった理由
   due_date: string | null;
+  deadline_time: string | null;  // 締め切り時刻 HH:MM
+  estimated_minutes: number | null; // 想定所要時間（分）
 };
 
 const localDateStr = (d = new Date()) =>
@@ -28,4 +30,6 @@ export const DEFAULT_TASK = (): TodoTask => ({
   achieve_reason: '',
   fail_reason: '',
   due_date: null,
+  deadline_time: null,
+  estimated_minutes: null,
 });

@@ -76,6 +76,33 @@ export default function TaskForm({ initial, onSave, saving, onCancel }: Props) {
         ))}
       </View>
 
+      {/* 締め切り時刻 */}
+      <Text style={s.label}>締め切り時刻（任意）</Text>
+      <TextInput
+        style={s.input}
+        value={task.deadline_time ?? ''}
+        onChangeText={(v) => update('deadline_time', v || null)}
+        placeholder="例: 18:00"
+        placeholderTextColor="#333"
+        keyboardType="numbers-and-punctuation"
+      />
+
+      {/* 想定所要時間 */}
+      <Text style={s.label}>想定所要時間（分）</Text>
+      <View style={s.minuteRow}>
+        {[15, 30, 60, 90, 120].map((min) => (
+          <TouchableOpacity
+            key={min}
+            style={[s.minuteBtn, task.estimated_minutes === min && s.active]}
+            onPress={() => update('estimated_minutes', task.estimated_minutes === min ? null : min)}
+          >
+            <Text style={[s.minuteTxt, task.estimated_minutes === min && s.activeTxt]}>
+              {min >= 60 ? `${min / 60}h` : `${min}m`}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {/* 期限日 */}
       <View style={s.toggleRow}>
         <Text style={s.toggleLbl}>期限日を設定する</Text>
@@ -186,6 +213,9 @@ const s = StyleSheet.create({
   priorityTxt: { color: '#444', fontSize: 11 },
   active: { backgroundColor: '#6366f1', borderColor: '#6366f1' },
   activeTxt: { color: '#fff', fontWeight: '600' },
+  minuteRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
+  minuteBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: '#222', alignItems: 'center' },
+  minuteTxt: { color: '#444', fontSize: 12 },
   toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   toggleLbl: { fontSize: 15, color: '#ccc' },
   divider: { height: 1, backgroundColor: '#1e1e1e', marginVertical: 20 },
