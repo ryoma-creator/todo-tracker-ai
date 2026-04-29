@@ -1,20 +1,27 @@
-export type TaskStatus = 'pending' | 'done' | 'failed';
+export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'failed';
+
+export type ProgressNote = {
+  ts: string;       // ISO timestamp
+  type: 'doing' | 'stuck';
+  body: string;
+};
 
 export type TodoTask = {
   id?: string;
   user_id?: string;
   created_at?: string;
-  date: string;           // 対象日 YYYY-MM-DD
-  title: string;          // タスク名
-  description: string;    // 詳細説明
-  leverage: string;       // やることで得られるレバレッジ・リターン
-  priority: number;       // 優先度 1-5
+  date: string;
+  title: string;
+  description: string;
+  leverage: string;
+  priority: number;
   status: TaskStatus;
-  achieve_reason: string; // 達成できた理由
-  fail_reason: string;    // 達成できなかった理由
+  achieve_reason: string;
+  fail_reason: string;
   due_date: string | null;
-  deadline_time: string | null;  // 締め切り時刻 HH:MM
-  estimated_minutes: number | null; // 想定所要時間（分）
+  deadline_time: string | null;
+  estimated_minutes: number | null;
+  progress_notes: string; // JSON: ProgressNote[]
 };
 
 const localDateStr = (d = new Date()) =>
@@ -32,4 +39,10 @@ export const DEFAULT_TASK = (): TodoTask => ({
   due_date: null,
   deadline_time: null,
   estimated_minutes: null,
+  progress_notes: '[]',
 });
+
+export function parseNotes(raw: string | null | undefined): ProgressNote[] {
+  try { return JSON.parse(raw ?? '[]') as ProgressNote[]; }
+  catch { return []; }
+}

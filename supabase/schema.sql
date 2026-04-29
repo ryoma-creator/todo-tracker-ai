@@ -8,12 +8,13 @@ create table if not exists public.todo_tasks (
   description text not null default '',
   leverage    text not null default '',
   priority    int  not null default 3 check (priority between 1 and 5),
-  status      text not null default 'pending' check (status in ('pending', 'done', 'failed')),
+  status      text not null default 'pending' check (status in ('pending', 'in_progress', 'done', 'failed')),
   achieve_reason text not null default '',
   fail_reason    text not null default '',
   due_date       date,
   deadline_time  time,              -- 当日の締め切り時刻
-  estimated_minutes int             -- 想定所要時間（分）
+  estimated_minutes int,            -- 想定所要時間（分）
+  progress_notes text not null default '[]'  -- 着手中メモ JSON配列
 );
 
 -- RLS 有効化

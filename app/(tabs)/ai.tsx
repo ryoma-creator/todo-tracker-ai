@@ -68,7 +68,7 @@ async function fetchTaskContext(limit = 30) {
   if (!data || data.length === 0) return null;
 
   return data.map((t) => {
-    const statusStr = t.status === 'done' ? '達成' : t.status === 'failed' ? '未達成' : '未着手';
+    const statusStr = t.status === 'done' ? '達成' : t.status === 'failed' ? '未達成' : t.status === 'in_progress' ? '着手中' : '未着手';
     const reasonStr = t.status === 'done' && t.achieve_reason
       ? ` 理由:${t.achieve_reason}`
       : t.status === 'failed' && t.fail_reason

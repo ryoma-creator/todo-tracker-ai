@@ -1,35 +1,39 @@
+'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, ActivityIndicator } from 'react-native';
 import { supabase } from '../../lib/supabase';
-import { type TodoTask } from '../../lib/types';
+import { type TodoTask, parseNotes } from '../../lib/types';
 import TaskForm from '../../components/TaskForm';
 
 const STATUS_COLOR: Record<string, string> = {
   pending: '#6366f1',
+  in_progress: '#f59e0b',
   done: '#22c55e',
   failed: '#ef4444',
 };
 
 const STATUS_LABEL: Record<string, string> = {
   pending: '未着手',
+  in_progress: '着手中',
   done: '達成',
   failed: '未達成',
 };
 
 const PRIORITY_LABEL = ['', '最低', '低', '中', '高', '最高'];
 
-// 優先度ごとの左ボーダー色と背景色
-const PRIORITY_STYLE: Record<number, { border: string; bg: string; badge: string }> = {
-  5: { border: '#ef4444', bg: '#1a0a0a', badge: '#ef4444' }, // 最高 - 赤
-  4: { border: '#f97316', bg: '#1a0f0a', badge: '#f97316' }, // 高   - オレンジ
-  3: { border: '#6366f1', bg: '#1a1a1a', badge: '#6366f1' }, // 中   - インディゴ
-  2: { border: '#22c55e', bg: '#0a1a0a', badge: '#22c55e' }, // 低   - 緑
-  1: { border: '#374151', bg: '#111111', badge: '#374151' }, // 最低 - グレー
+const PRIORITY_STYLE: Record<number, { border: string; bg: string }> = {
+  5: { border: '#ef4444', bg: '#1a0a0a' },
+  4: { border: '#f97316', bg: '#1a0f0a' },
+  3: { border: '#6366f1', bg: '#1a1a1a' },
+  2: { border: '#22c55e', bg: '#0a1a0a' },
+  1: { border: '#374151', bg: '#111111' },
 };
 
 function TaskCard({ task, onEdit, onDelete }: { task: TodoTask; onEdit: () => void; onDelete: () => void }) {
   const [confirmDel, setConfirmDel] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
   const ps = PRIORITY_STYLE[task.priority] ?? PRIORITY_STYLE[3];
+  const notes = parseNotes(task.progress_notes);
 
   return (
     <View style={[s.card, { backgroundColor: ps.bg, borderLeftColor: ps.border }]}>
@@ -69,7 +73,7 @@ function TaskCard({ task, onEdit, onDelete }: { task: TodoTask; onEdit: () => vo
 
       {task.leverage ? (
         <View style={s.leverageBox}>
-          <Text style={s.leverageLabel}>レバレッジ</Text>
+          <Text style={s.leverageLabel}>得られる価値</Text>
           <Text style={s.leverageText}>{task.leverage}</Text>
         </View>
       ) : null}
@@ -87,6 +91,21 @@ function TaskCard({ task, onEdit, onDelete }: { task: TodoTask; onEdit: () => vo
           </Text>
         ) : null}
       </View>
+
+      {/* 着手中メモ */}
+      {task.status === 'in_progress' && notes.length > 0 && (
+        <TouchableOpacity onPress={() => setShowNotes(!showNotes)} style={s.notesToggle}>
+          <Text style={s.notesToggleTxt}>
+            {showNotes ? '▲ メモを閉じる' : `▼ 進捗メモ ${notes.length}件`}
+          </Text>
+        </TouchableOpacity>
+      )}
+      {task.status === 'in_progress' && showNotes && notes.map((n, i) => (
+        <View key={i} style={[s.noteChip, n.type === 'stuck' ? s.noteChipStuck : s.noteChipDoing]}>
+          <Text style={s.noteChipLabel}>{n.type === 'doing' ? '▶' : '⚠'}</Text>
+          <Text style={s.noteChipBody}>{n.body}</Text>
+        </View>
+      ))}
 
       {task.status === 'done' && task.achieve_reason ? (
         <Text style={s.reasonTxt}>✅ {task.achieve_reason}</Text>
@@ -126,18 +145,10 @@ export default function TodayScreen() {
     setSaving(true);
     setErrorMsg(null);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setErrorMsg('ログインが必要です。ページを再読み込みしてください。');
-      setSaving(false);
-      return;
-    }
+    if (!user) { setErrorMsg('ログインが必要です。'); setSaving(false); return; }
     const { error } = await supabase.from('todo_tasks').insert({ ...task, user_id: user.id });
-    if (error) {
-      setErrorMsg(`保存エラー: ${error.message}`);
-    } else {
-      setShowAdd(false);
-      loadTasks();
-    }
+    if (error) setErrorMsg(`保存エラー: ${error.message}`);
+    else { setShowAdd(false); loadTasks(); }
     setSaving(false);
   };
 
@@ -148,16 +159,12 @@ export default function TodayScreen() {
       title: task.title, description: task.description, leverage: task.leverage,
       priority: task.priority, status: task.status,
       achieve_reason: task.achieve_reason, fail_reason: task.fail_reason,
-      due_date: task.due_date,
-      deadline_time: task.deadline_time,
+      due_date: task.due_date, deadline_time: task.deadline_time,
       estimated_minutes: task.estimated_minutes,
+      progress_notes: task.progress_notes,
     }).eq('id', task.id as string);
-    if (error) {
-      setErrorMsg(`更新エラー: ${error.message}`);
-    } else {
-      setEditTarget(null);
-      loadTasks();
-    }
+    if (error) setErrorMsg(`更新エラー: ${error.message}`);
+    else { setEditTarget(null); loadTasks(); }
     setSaving(false);
   };
 
@@ -169,6 +176,7 @@ export default function TodayScreen() {
   };
 
   const doneCount = tasks.filter((t) => t.status === 'done').length;
+  const inProgressCount = tasks.filter((t) => t.status === 'in_progress').length;
   const failedCount = tasks.filter((t) => t.status === 'failed').length;
 
   if (loading) return <ActivityIndicator style={{ flex: 1, backgroundColor: '#0f0f0f' }} color="#6366f1" />;
@@ -176,12 +184,11 @@ export default function TodayScreen() {
   return (
     <View style={s.container}>
       <ScrollView contentContainerStyle={s.content}>
-        {/* ヘッダー */}
         <View style={s.header}>
           <View>
             <Text style={s.dateText}>{todayStr}</Text>
             <Text style={s.summaryText}>
-              {tasks.length}件 / 達成 {doneCount} / 未達成 {failedCount}
+              {tasks.length}件 ／ 着手中 {inProgressCount} ／ 達成 {doneCount} ／ 未達成 {failedCount}
             </Text>
           </View>
           <TouchableOpacity onPress={() => supabase.auth.signOut()}>
@@ -198,26 +205,17 @@ export default function TodayScreen() {
           </View>
         )}
 
-        {tasks.length === 0 && (
-          <Text style={s.empty}>今日のタスクはまだありません</Text>
-        )}
+        {tasks.length === 0 && <Text style={s.empty}>今日のタスクはまだありません</Text>}
 
         {tasks.map((t) => (
-          <TaskCard
-            key={t.id}
-            task={t}
-            onEdit={() => setEditTarget(t)}
-            onDelete={() => handleDelete(t)}
-          />
+          <TaskCard key={t.id} task={t} onEdit={() => setEditTarget(t)} onDelete={() => handleDelete(t)} />
         ))}
       </ScrollView>
 
-      {/* タスク追加ボタン */}
       <TouchableOpacity style={s.addBtn} onPress={() => setShowAdd(true)}>
         <Text style={s.addBtnTxt}>+ タスクを追加</Text>
       </TouchableOpacity>
 
-      {/* 追加モーダル */}
       <Modal visible={showAdd} animationType="slide" presentationStyle="pageSheet">
         <View style={s.modalContainer}>
           <View style={s.modalHeader}>
@@ -226,16 +224,10 @@ export default function TodayScreen() {
               <Text style={s.closeBtn}>✕</Text>
             </TouchableOpacity>
           </View>
-          <TaskForm
-            initial={{ date: todayStr }}
-            onSave={handleAdd}
-            saving={saving}
-            onCancel={() => setShowAdd(false)}
-          />
+          <TaskForm initial={{ date: todayStr }} onSave={handleAdd} saving={saving} onCancel={() => setShowAdd(false)} />
         </View>
       </Modal>
 
-      {/* 編集モーダル */}
       {editTarget && (
         <Modal visible animationType="slide" presentationStyle="pageSheet">
           <View style={s.modalContainer}>
@@ -245,12 +237,7 @@ export default function TodayScreen() {
                 <Text style={s.closeBtn}>✕</Text>
               </TouchableOpacity>
             </View>
-            <TaskForm
-              initial={editTarget}
-              onSave={handleEdit}
-              saving={saving}
-              onCancel={() => setEditTarget(null)}
-            />
+            <TaskForm initial={editTarget} onSave={handleEdit} saving={saving} onCancel={() => setEditTarget(null)} />
           </View>
         </Modal>
       )}
@@ -294,6 +281,13 @@ const s = StyleSheet.create({
   deadlineTxt: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
   dueTxt: { color: '#f59e0b', fontSize: 12 },
   estimatedTxt: { color: '#6b7280', fontSize: 12 },
+  notesToggle: { marginTop: 10 },
+  notesToggleTxt: { color: '#f59e0b', fontSize: 12 },
+  noteChip: { flexDirection: 'row', gap: 8, borderRadius: 8, padding: 10, marginTop: 6, borderLeftWidth: 2 },
+  noteChipDoing: { backgroundColor: '#1a1f2e', borderLeftColor: '#6366f1' },
+  noteChipStuck: { backgroundColor: '#1f1a0a', borderLeftColor: '#f59e0b' },
+  noteChipLabel: { fontSize: 13 },
+  noteChipBody: { color: '#ccc', fontSize: 13, flex: 1, lineHeight: 18 },
   reasonTxt: { color: '#4ade80', fontSize: 13, marginTop: 8, lineHeight: 20 },
   failReason: { color: '#f87171' },
   addBtn: { position: 'absolute', bottom: 24, left: 20, right: 20, backgroundColor: '#6366f1', borderRadius: 14, padding: 18, alignItems: 'center' },
