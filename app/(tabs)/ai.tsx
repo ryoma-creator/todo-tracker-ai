@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, TextInput, Platform } from 'react-native';
 import OpenAI from 'openai';
 import { supabase } from '../../lib/supabase';
 
@@ -16,15 +16,10 @@ type Tab = 'diagnosis' | 'schedule' | 'chat';
 type ScheduleItem = { time: string; task: string; duration: string; reason: string };
 type Schedule = { items: ScheduleItem[]; advice: string };
 
-const LEVEL_COLOR: Record<AlertLevel, string> = {
-  danger: '#ef4444',
-  warning: '#f59e0b',
-  good: '#22c55e',
-};
-const LEVEL_ICON: Record<AlertLevel, string> = {
-  danger: '🚨',
-  warning: '⚠️',
-  good: '✅',
+const LEVEL_STYLE: Record<AlertLevel, { bg: string; border: string; text: string; icon: string }> = {
+  danger:  { bg: '#FEF2F2', border: '#EF4444', text: '#DC2626', icon: '🚨' },
+  warning: { bg: '#FFFBEB', border: '#F59E0B', text: '#D97706', icon: '⚠️' },
+  good:    { bg: '#F0FDF4', border: '#22C55E', text: '#16A34A', icon: '✅' },
 };
 
 const QUICK_QUESTIONS = [
@@ -34,317 +29,188 @@ const QUICK_QUESTIONS = [
   '今の自分にとって最優先事項は？',
 ];
 
-// condition_logsからコンディションデータを取得
 async function fetchConditionContext(limit = 30) {
   const { data } = await supabase
     .from('condition_logs')
     .select('date, sleep_hours, sleep_quality, fatigue, focus, mood, study_hours, memo')
     .order('date', { ascending: false })
     .limit(limit);
-
   if (!data || data.length === 0) return null;
-
   return data.map((c) => {
-    const parts = [
-      `[${c.date}] 睡眠${c.sleep_hours}h(質${c.sleep_quality})`,
-      `疲労${c.fatigue}`,
-      `集中${c.focus}`,
-      c.mood != null ? `気分${c.mood}` : null,
-      c.study_hours ? `学習${c.study_hours}h` : null,
-      c.memo ? `メモ:${c.memo}` : null,
-    ].filter(Boolean);
+    const parts = [`[${c.date}] 睡眠${c.sleep_hours}h(質${c.sleep_quality})`, `疲労${c.fatigue}`, `集中${c.focus}`, c.mood != null ? `気分${c.mood}` : null, c.study_hours ? `学習${c.study_hours}h` : null, c.memo ? `メモ:${c.memo}` : null].filter(Boolean);
     return parts.join(' ');
   }).join('\n');
 }
 
-// 過去タスクを文字列に変換してAIに渡す
 async function fetchTaskContext(limit = 30) {
   const { data } = await supabase
     .from('todo_tasks')
     .select('date, title, leverage, priority, status, achieve_reason, fail_reason, deadline_time, estimated_minutes')
     .order('date', { ascending: false })
     .limit(limit);
-
   if (!data || data.length === 0) return null;
-
   return data.map((t) => {
     const statusStr = t.status === 'done' ? '達成' : t.status === 'failed' ? '未達成' : t.status === 'in_progress' ? '着手中' : '未着手';
-    const reasonStr = t.status === 'done' && t.achieve_reason
-      ? ` 理由:${t.achieve_reason}`
-      : t.status === 'failed' && t.fail_reason
-        ? ` 理由:${t.fail_reason}`
-        : '';
-    const timeStr = t.deadline_time ? ` 締切:${t.deadline_time}` : '';
-    const estStr = t.estimated_minutes ? ` 所要:${t.estimated_minutes}分` : '';
-    return `[${t.date}] ${t.title}（優先度${t.priority}）→${statusStr}${reasonStr}${timeStr}${estStr}${t.leverage ? ` レバレッジ:${t.leverage}` : ''}`;
+    const reasonStr = t.status === 'done' && t.achieve_reason ? ` 理由:${t.achieve_reason}` : t.status === 'failed' && t.fail_reason ? ` 理由:${t.fail_reason}` : '';
+    return `[${t.date}] ${t.title}（優先度${t.priority}）→${statusStr}${reasonStr}${t.deadline_time ? ` 締切:${t.deadline_time}` : ''}${t.estimated_minutes ? ` 所要:${t.estimated_minutes}分` : ''}${t.leverage ? ` レバレッジ:${t.leverage}` : ''}`;
   }).join('\n');
 }
 
-// 今日の未着手タスクを取得してスケジュール提案に使う
 async function fetchTodayPendingTasks() {
   const today = new Date();
   const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  const { data } = await supabase
-    .from('todo_tasks')
-    .select('title, priority, deadline_time, estimated_minutes, leverage')
-    .eq('date', dateStr)
-    .eq('status', 'pending')
-    .order('priority', { ascending: false });
+  const { data } = await supabase.from('todo_tasks').select('title, priority, deadline_time, estimated_minutes, leverage').eq('date', dateStr).eq('status', 'pending').order('priority', { ascending: false });
   return data ?? [];
 }
 
-// パターン診断タブ
+// ── パターン診断 ──────────────────────────────────────
 function DiagnosisTab() {
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [step, setStep] = useState('');
 
-  const runDiagnosis = async () => {
+  const run = async () => {
     setLoading(true);
     setStep('タスクデータを取得中...');
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
-
+    const timeoutPromise = new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 60000));
     try {
-      const [taskContext, conditionContext] = await Promise.all([
-        fetchTaskContext(30),
-        fetchConditionContext(30),
-      ]);
-
+      const [taskContext, conditionContext] = await Promise.all([fetchTaskContext(30), fetchConditionContext(30)]);
       if (!taskContext) {
         setDiagnosis({ alerts: [], priority: '', summary: '記録が少なすぎます。数日タスクを記録すると分析できます。' });
-        setDone(true);
-        return;
+        setDone(true); return;
       }
-
-      const recordCount = taskContext.split('\n').length;
-      setStep(`${recordCount}件のタスク + コンディションデータをAIに送信中...`);
-      await new Promise((r) => setTimeout(r, 300));
-      setStep('AIが分析中... (通常15〜30秒)');
-
-      const conditionSection = conditionContext
-        ? `\n\n【コンディション記録（condition-tracker連携）】\n${conditionContext}`
-        : '';
-
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{
-          role: 'system',
-          content: `あなたはタスク管理・生産性の専門コーチ。以下のデータからパターン・傾向を分析し、改善提案をしてください。
-
-【タスク記録】
-${taskContext}${conditionSection}
-
-コンディションデータがある場合は「睡眠時間とタスク達成率の相関」「疲労度が高い日の傾向」なども分析してください。
-
-以下のJSON形式のみで返してください：
-{
-  "alerts": [
-    {
-      "level": "danger" | "warning" | "good",
-      "title": "タイトル（15字以内）",
-      "detail": "具体的な分析（数値・相関を含む）"
-    }
-  ],
-  "priority": "今すぐ取り組むべき最優先事項（具体的に、1-2文）",
-  "summary": "全体の傾向まとめ（40字以内）"
-}
-
-danger: 今すぐ対処が必要 / warning: 注意が必要 / good: うまくいっている点
-アラートは最大5個。`,
-        }],
-        // @ts-expect-error signal はSDKの型定義にないが fetch レベルで有効
-        signal: controller.signal,
-      });
-
-      setStep('結果を整形中...');
+      setStep(`${taskContext.split('\n').length}件のタスクをAIに送信中...`);
+      const response = await Promise.race([
+        openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'system', content: `あなたはタスク管理・生産性の専門コーチ。以下のデータからパターン・傾向を分析し、改善提案をしてください。\n\n【タスク記録】\n${taskContext}${conditionContext ? `\n\n【コンディション記録】\n${conditionContext}` : ''}\n\nJSON形式のみで返してください：\n{\n  "alerts": [{"level": "danger"|"warning"|"good", "title": "15字以内", "detail": "具体的な分析"}],\n  "priority": "今すぐ取り組むべき最優先事項（1-2文）",\n  "summary": "全体の傾向まとめ（40字以内）"\n}\ndanger:今すぐ対処 / warning:注意 / good:うまくいっている点。アラートは最大5個。` }],
+        }),
+        timeoutPromise,
+      ]);
       const content = response.choices[0].message.content ?? '{}';
       const match = content.match(/\{[\s\S]*\}/);
-      const parsed = JSON.parse(match ? match[0] : content) as Diagnosis;
-      setDiagnosis(parsed);
+      setDiagnosis(JSON.parse(match ? match[0] : content) as Diagnosis);
       setDone(true);
-
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '不明なエラー';
-      const isTimeout = msg.includes('abort') || msg.includes('AbortError');
-      setDiagnosis({
-        alerts: [],
-        priority: '',
-        summary: isTimeout ? 'タイムアウト（60秒）。ネット接続を確認して再試行してください。' : `エラー: ${msg}`,
-      });
+      setDiagnosis({ alerts: [], priority: '', summary: msg === 'timeout' ? 'タイムアウト。ネット接続を確認して再試行してください。' : `エラー: ${msg}` });
       setDone(true);
-    } finally {
-      clearTimeout(timeout);
-      setLoading(false);
-      setStep('');
-    }
+    } finally { setLoading(false); setStep(''); }
   };
 
   return (
-    <ScrollView style={t.tabContent} contentContainerStyle={t.tabInner}>
-      <Text style={t.diagTitle}>AI パターン診断</Text>
-      <Text style={t.diagSub}>過去の記録から達成傾向・ボトルネックを分析します</Text>
+    <ScrollView style={a.tabContent} contentContainerStyle={a.tabInner} showsVerticalScrollIndicator={false}>
+      <View style={a.pageHeader}>
+        <Text style={a.pageTitle}>AIパターン診断</Text>
+        <Text style={a.pageSub}>過去の記録から達成傾向・ボトルネックを分析します</Text>
+      </View>
 
-      <TouchableOpacity style={t.diagBtn} onPress={runDiagnosis} disabled={loading}>
-        {loading
-          ? <ActivityIndicator color="#fff" />
-          : <Text style={t.diagBtnTxt}>{done ? '再分析する' : '分析する'}</Text>}
+      <TouchableOpacity style={a.primaryBtn} onPress={run} disabled={loading} activeOpacity={0.8}>
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={a.primaryBtnTxt}>{done ? '再分析する' : '✦ 分析を開始する'}</Text>}
       </TouchableOpacity>
 
       {loading && step ? (
-        <View style={t.stepBox}>
-          <Text style={t.stepText}>{step}</Text>
+        <View style={a.stepBox}>
+          <ActivityIndicator color="#6366f1" size="small" />
+          <Text style={a.stepTxt}>{step}</Text>
         </View>
       ) : null}
 
       {diagnosis && (
-        <View style={t.result}>
-          {/* 最優先事項 */}
+        <View style={a.resultWrap}>
           {diagnosis.priority ? (
-            <View style={t.priorityBox}>
-              <Text style={t.priorityLabel}>今すぐやること</Text>
-              <Text style={t.priorityText}>{diagnosis.priority}</Text>
+            <View style={a.priorityCard}>
+              <Text style={a.priorityCardLabel}>▶ 今すぐやること</Text>
+              <Text style={a.priorityCardTxt}>{diagnosis.priority}</Text>
             </View>
           ) : null}
-
-          {/* サマリー */}
-          <View style={t.summaryBox}>
-            <Text style={t.summaryText}>{diagnosis.summary}</Text>
-          </View>
-
-          {/* アラート */}
-          {diagnosis.alerts.map((alert, i) => (
-            <View key={i} style={[t.alertCard, { borderLeftColor: LEVEL_COLOR[alert.level] }]}>
-              <View style={t.alertHeader}>
-                <Text style={t.alertIcon}>{LEVEL_ICON[alert.level]}</Text>
-                <Text style={[t.alertTitle, { color: LEVEL_COLOR[alert.level] }]}>{alert.title}</Text>
-              </View>
-              <Text style={t.alertDetail}>{alert.detail}</Text>
+          {diagnosis.summary ? (
+            <View style={a.summaryCard}>
+              <Text style={a.summaryTxt}>{diagnosis.summary}</Text>
             </View>
-          ))}
+          ) : null}
+          {diagnosis.alerts.map((alert, i) => {
+            const ls = LEVEL_STYLE[alert.level];
+            return (
+              <View key={i} style={[a.alertCard, { backgroundColor: ls.bg, borderLeftColor: ls.border }]}>
+                <View style={a.alertHead}>
+                  <Text style={a.alertIcon}>{ls.icon}</Text>
+                  <Text style={[a.alertTitle, { color: ls.text }]}>{alert.title}</Text>
+                </View>
+                <Text style={a.alertDetail}>{alert.detail}</Text>
+              </View>
+            );
+          })}
         </View>
       )}
     </ScrollView>
   );
 }
 
-// スケジュール提案タブ
+// ── スケジュール提案 ──────────────────────────────────
 function ScheduleTab() {
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState('');
 
-  const runSchedule = async () => {
+  const run = async () => {
     setLoading(true);
     setStep('今日のタスクを取得中...');
-
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
-
     try {
-      const [tasks, conditionContext] = await Promise.all([
-        fetchTodayPendingTasks(),
-        fetchConditionContext(3),
-      ]);
-
-      if (tasks.length === 0) {
-        setSchedule({ items: [], advice: '今日の未着手タスクがありません。タスクを追加してから実行してください。' });
-        return;
-      }
-
-      const taskList = tasks.map((t) => {
-        const parts = [`・${t.title}（優先度${t.priority}）`];
-        if (t.deadline_time) parts.push(`締切:${t.deadline_time}`);
-        if (t.estimated_minutes) parts.push(`所要:${t.estimated_minutes}分`);
-        if (t.leverage) parts.push(`価値:${t.leverage}`);
-        return parts.join(' ');
-      }).join('\n');
-
+      const [tasks, conditionContext] = await Promise.all([fetchTodayPendingTasks(), fetchConditionContext(3)]);
+      if (tasks.length === 0) { setSchedule({ items: [], advice: '今日の未着手タスクがありません。タスクを追加してから実行してください。' }); return; }
+      const taskList = tasks.map((t) => [`・${t.title}（優先度${t.priority}）`, t.deadline_time ? `締切:${t.deadline_time}` : null, t.estimated_minutes ? `所要:${t.estimated_minutes}分` : null, t.leverage ? `価値:${t.leverage}` : null].filter(Boolean).join(' ')).join('\n');
       setStep(`${tasks.length}件のタスクを分析中...`);
-
       const now = new Date();
-      const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
-        messages: [{
-          role: 'system',
-          content: `あなたは生産性コーチ。今日の残りタスクを最適な順番・時間割で組み立ててください。
-
-現在時刻: ${currentTime}
-
-【今日の未着手タスク】
-${taskList}
-
-${conditionContext ? `【直近のコンディション】\n${conditionContext}` : ''}
-
-以下のJSON形式のみで返してください：
-{
-  "items": [
-    {
-      "time": "開始時刻（例: 14:00）",
-      "task": "タスク名",
-      "duration": "所要時間（例: 30分）",
-      "reason": "この順番にした理由（10字以内）"
-    }
-  ],
-  "advice": "今日全体へのアドバイス（40字以内）"
-}
-
-優先度・締切・レバレッジ・コンディションを総合して最適な順番を決定すること。`,
-        }],
-        // @ts-expect-error signal はSDKの型定義にないが fetch レベルで有効
+        messages: [{ role: 'system', content: `あなたは生産性コーチ。今日の残りタスクを最適な順番・時間割で組み立ててください。\n\n現在時刻: ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}\n\n【今日の未着手タスク】\n${taskList}\n\n${conditionContext ? `【直近のコンディション】\n${conditionContext}` : ''}\n\nJSON形式のみで返してください：\n{\n  "items": [{"time": "14:00", "task": "タスク名", "duration": "30分", "reason": "理由10字以内"}],\n  "advice": "今日全体へのアドバイス（40字以内）"\n}` }],
+        // @ts-expect-error signal
         signal: controller.signal,
       });
-
       const content = response.choices[0].message.content ?? '{}';
       const match = content.match(/\{[\s\S]*\}/);
-      const parsed = JSON.parse(match ? match[0] : content) as Schedule;
-      setSchedule(parsed);
-
+      setSchedule(JSON.parse(match ? match[0] : content) as Schedule);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '不明なエラー';
       setSchedule({ items: [], advice: `エラー: ${msg}` });
-    } finally {
-      clearTimeout(timeout);
-      setLoading(false);
-      setStep('');
-    }
+    } finally { clearTimeout(timeout); setLoading(false); setStep(''); }
   };
 
   return (
-    <ScrollView style={t.tabContent} contentContainerStyle={t.tabInner}>
-      <Text style={t.diagTitle}>今日のスケジュール提案</Text>
-      <Text style={t.diagSub}>締切・優先度・レバレッジを元にAIが最適な時間割を組みます</Text>
+    <ScrollView style={a.tabContent} contentContainerStyle={a.tabInner} showsVerticalScrollIndicator={false}>
+      <View style={a.pageHeader}>
+        <Text style={a.pageTitle}>時間割を生成</Text>
+        <Text style={a.pageSub}>締切・優先度・レバレッジを元にAIが最適な時間割を組みます</Text>
+      </View>
 
-      <TouchableOpacity style={t.diagBtn} onPress={runSchedule} disabled={loading}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={t.diagBtnTxt}>スケジュールを生成</Text>}
+      <TouchableOpacity style={a.primaryBtn} onPress={run} disabled={loading} activeOpacity={0.8}>
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={a.primaryBtnTxt}>✦ スケジュールを生成</Text>}
       </TouchableOpacity>
 
       {loading && step ? (
-        <View style={t.stepBox}>
-          <Text style={t.stepText}>{step}</Text>
+        <View style={a.stepBox}>
+          <ActivityIndicator color="#6366f1" size="small" />
+          <Text style={a.stepTxt}>{step}</Text>
         </View>
       ) : null}
 
       {schedule && (
-        <View style={t.result}>
-          {schedule.advice ? (
-            <View style={t.summaryBox}>
-              <Text style={t.summaryText}>{schedule.advice}</Text>
-            </View>
-          ) : null}
-
+        <View style={a.resultWrap}>
+          {schedule.advice ? <View style={a.summaryCard}><Text style={a.summaryTxt}>{schedule.advice}</Text></View> : null}
           {schedule.items.map((item, i) => (
-            <View key={i} style={t.scheduleCard}>
-              <View style={t.scheduleHeader}>
-                <Text style={t.scheduleTime}>{item.time}</Text>
-                <Text style={t.scheduleDuration}>{item.duration}</Text>
+            <View key={i} style={a.schedCard}>
+              <View style={a.schedLeft}>
+                <Text style={a.schedTime}>{item.time}</Text>
+                <Text style={a.schedDur}>{item.duration}</Text>
               </View>
-              <Text style={t.scheduleTask}>{item.task}</Text>
-              <Text style={t.scheduleReason}>{item.reason}</Text>
+              <View style={a.schedRight}>
+                <Text style={a.schedTask}>{item.task}</Text>
+                <Text style={a.schedReason}>{item.reason}</Text>
+              </View>
             </View>
           ))}
         </View>
@@ -353,116 +219,87 @@ ${conditionContext ? `【直近のコンディション】\n${conditionContext}`
   );
 }
 
-// チャットタブ
+// ── チャット ──────────────────────────────────────────
 function ChatTab() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const sendMessage = async (text: string) => {
+  const send = async (text: string) => {
     if (!text.trim() || loading) return;
     setInput('');
     setLoading(true);
-
     const newMessages: Message[] = [...messages, { role: 'user', content: text }];
     setMessages(newMessages);
-
-    const [taskContext, conditionContext] = await Promise.all([
-      fetchTaskContext(14),
-      fetchConditionContext(14),
-    ]);
-
-    const conditionSection = conditionContext
-      ? `\n\n【コンディション記録】\n${conditionContext}`
-      : '';
-
+    const [taskContext, conditionContext] = await Promise.all([fetchTaskContext(14), fetchConditionContext(14)]);
     const response = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        {
-          role: 'system',
-          content: `あなたはRyomaの生産性コーチ。
-【過去14日のタスク記録】
-${taskContext ?? 'まだ記録がありません'}${conditionSection}
-
-・日本語・短く端的に答える
-・コンディションとタスク達成の相関も踏まえてアドバイスする
-・記録が少ない場合は「記録を続けると分析できます」と伝える`,
-        },
+        { role: 'system', content: `あなたはRyomaの生産性コーチ。\n【過去14日のタスク記録】\n${taskContext ?? 'まだ記録がありません'}${conditionContext ? `\n\n【コンディション記録】\n${conditionContext}` : ''}\n・日本語・短く端的に答える\n・コンディションとタスク達成の相関も踏まえてアドバイスする` },
         ...newMessages,
       ],
     });
-
-    const aiContent = response.choices[0].message.content ?? '';
-    setMessages([...newMessages, { role: 'assistant', content: aiContent }]);
+    setMessages([...newMessages, { role: 'assistant', content: response.choices[0].message.content ?? '' }]);
     setLoading(false);
   };
 
   return (
-    <View style={t.chatContainer}>
-      <ScrollView style={t.messages} contentContainerStyle={t.messagesContent}>
-        {messages.length === 0 && (
+    <View style={a.chatWrap}>
+      <ScrollView style={a.chatScroll} contentContainerStyle={a.chatContent} showsVerticalScrollIndicator={false}>
+        {messages.length === 0 ? (
           <View>
-            <Text style={t.hint}>タスクデータをもとに答えます</Text>
-            <View style={t.quickBtns}>
+            <Text style={a.chatHint}>タスクデータをもとに答えます</Text>
+            <View style={a.quickList}>
               {QUICK_QUESTIONS.map((q) => (
-                <TouchableOpacity key={q} style={t.quickBtn} onPress={() => sendMessage(q)}>
-                  <Text style={t.quickBtnTxt}>{q}</Text>
+                <TouchableOpacity key={q} style={a.quickBtn} onPress={() => send(q)} activeOpacity={0.7}>
+                  <Text style={a.quickBtnTxt}>{q}</Text>
+                  <Text style={a.quickArrow}>→</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
-        )}
+        ) : null}
         {messages.map((m, i) => (
-          <View key={i} style={[t.bubble, m.role === 'user' ? t.userBubble : t.aiBubble]}>
-            <Text style={t.bubbleTxt}>{m.content}</Text>
+          <View key={i} style={[a.bubble, m.role === 'user' ? a.bubbleUser : a.bubbleAI]}>
+            {m.role === 'assistant' && <Text style={a.bubbleRole}>AI</Text>}
+            <Text style={[a.bubbleTxt, m.role === 'user' && { color: '#fff' }]}>{m.content}</Text>
           </View>
         ))}
         {loading && <ActivityIndicator color="#6366f1" style={{ marginTop: 16 }} />}
       </ScrollView>
 
-      <View style={t.inputRow}>
+      <View style={a.inputRow}>
         <TextInput
-          style={t.input}
+          style={a.input}
           value={input}
           onChangeText={setInput}
-          placeholder="質問する..."
-          placeholderTextColor="#444"
+          placeholder="質問を入力..."
+          placeholderTextColor="#94A3B8"
           returnKeyType="send"
-          onSubmitEditing={() => sendMessage(input)}
+          onSubmitEditing={() => send(input)}
         />
-        <TouchableOpacity style={t.sendBtn} onPress={() => sendMessage(input)} disabled={loading}>
-          <Text style={t.sendBtnTxt}>送信</Text>
+        <TouchableOpacity style={[a.sendBtn, (!input.trim() || loading) && a.sendBtnDisabled]} onPress={() => send(input)} disabled={!input.trim() || loading}>
+          <Text style={a.sendBtnTxt}>送信</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
+// ── メイン ────────────────────────────────────────────
 export default function AIScreen() {
   const [tab, setTab] = useState<Tab>('diagnosis');
+  const TABS: [Tab, string][] = [['diagnosis', 'パターン診断'], ['schedule', '時間割'], ['chat', 'チャット']];
 
   return (
-    <View style={t.container}>
-      <View style={t.tabBar}>
-        <TouchableOpacity
-          style={[t.tabBtn, tab === 'diagnosis' && t.tabBtnActive]}
-          onPress={() => setTab('diagnosis')}
-        >
-          <Text style={[t.tabBtnTxt, tab === 'diagnosis' && t.tabBtnTxtActive]}>パターン</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[t.tabBtn, tab === 'schedule' && t.tabBtnActive]}
-          onPress={() => setTab('schedule')}
-        >
-          <Text style={[t.tabBtnTxt, tab === 'schedule' && t.tabBtnTxtActive]}>時間割</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[t.tabBtn, tab === 'chat' && t.tabBtnActive]}
-          onPress={() => setTab('chat')}
-        >
-          <Text style={[t.tabBtnTxt, tab === 'chat' && t.tabBtnTxtActive]}>チャット</Text>
-        </TouchableOpacity>
+    <View style={a.container}>
+      {/* タブバー */}
+      <View style={a.tabBar}>
+        {TABS.map(([key, label]) => (
+          <TouchableOpacity key={key} style={[a.tabBtn, tab === key && a.tabBtnActive]} onPress={() => setTab(key)}>
+            <Text style={[a.tabBtnTxt, tab === key && a.tabBtnTxtActive]}>{label}</Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
       {tab === 'diagnosis' && <DiagnosisTab />}
@@ -472,51 +309,66 @@ export default function AIScreen() {
   );
 }
 
-const t = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f0f0f' },
-  tabBar: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#1e1e1e' },
-  tabBtn: { flex: 1, paddingVertical: 14, alignItems: 'center' },
-  tabBtnActive: { borderBottomWidth: 2, borderBottomColor: '#6366f1' },
-  tabBtnTxt: { color: '#555', fontSize: 14 },
-  tabBtnTxtActive: { color: '#6366f1', fontWeight: '600' },
+const a = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F2F4F8' },
+
+  // タブバー
+  tabBar: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E8EBF2' },
+  tabBtn: { flex: 1, paddingVertical: 14, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tabBtnActive: { borderBottomColor: '#6366f1' },
+  tabBtnTxt: { color: '#94A3B8', fontSize: 13, fontWeight: '600' },
+  tabBtnTxtActive: { color: '#6366f1', fontWeight: '700' },
+
+  // 共通
   tabContent: { flex: 1 },
-  tabInner: { padding: 24, paddingBottom: 48 },
-  diagTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 6 },
-  diagSub: { fontSize: 13, color: '#555', marginBottom: 24, lineHeight: 20 },
-  diagBtn: { backgroundColor: '#6366f1', borderRadius: 12, padding: 14, alignItems: 'center', marginBottom: 16 },
-  diagBtnTxt: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  stepBox: { backgroundColor: '#1a1a2e', borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#2d2d4e', alignItems: 'center' },
-  stepText: { color: '#a5b4fc', fontSize: 13, textAlign: 'center' },
-  scheduleCard: { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16, borderLeftWidth: 3, borderLeftColor: '#6366f1' },
-  scheduleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  scheduleTime: { color: '#6366f1', fontSize: 18, fontWeight: '800' },
-  scheduleDuration: { color: '#555', fontSize: 12 },
-  scheduleTask: { color: '#fff', fontSize: 15, fontWeight: '600', marginBottom: 4 },
-  scheduleReason: { color: '#6b7280', fontSize: 12 },
-  result: { gap: 12 },
-  priorityBox: { backgroundColor: '#1e1b4b', borderRadius: 12, padding: 16, borderLeftWidth: 3, borderLeftColor: '#6366f1' },
-  priorityLabel: { color: '#6366f1', fontSize: 11, fontWeight: '700', marginBottom: 6 },
-  priorityText: { color: '#e0e7ff', fontSize: 15, lineHeight: 22 },
-  summaryBox: { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16 },
-  summaryText: { color: '#aaa', fontSize: 14, lineHeight: 22 },
-  alertCard: { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 16, borderLeftWidth: 3 },
-  alertHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  tabInner: { padding: 20, paddingBottom: 48, gap: 16 },
+  pageHeader: { gap: 4 },
+  pageTitle: { color: '#1A1D2E', fontSize: 22, fontWeight: '800' },
+  pageSub: { color: '#64748B', fontSize: 13, lineHeight: 20 },
+  primaryBtn: { backgroundColor: '#6366f1', borderRadius: 14, padding: 16, alignItems: 'center', ...Platform.select({ ios: { shadowColor: '#6366f1', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 }, android: { elevation: 4 }, default: { boxShadow: '0 4px 12px rgba(99,102,241,0.3)' } as any }) },
+  primaryBtnTxt: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  stepBox: { flexDirection: 'row', gap: 10, backgroundColor: '#fff', borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: '#E8EBF2' },
+  stepTxt: { color: '#6366f1', fontSize: 13 },
+
+  // 結果
+  resultWrap: { gap: 12 },
+  priorityCard: { backgroundColor: '#EDE9FE', borderRadius: 14, padding: 16, borderLeftWidth: 4, borderLeftColor: '#6366f1' },
+  priorityCardLabel: { color: '#6366f1', fontSize: 11, fontWeight: '800', marginBottom: 6, letterSpacing: 0.5 },
+  priorityCardTxt: { color: '#1A1D2E', fontSize: 15, lineHeight: 24, fontWeight: '600' },
+  summaryCard: { backgroundColor: '#fff', borderRadius: 14, padding: 16, borderWidth: 1, borderColor: '#E8EBF2' },
+  summaryTxt: { color: '#374151', fontSize: 14, lineHeight: 22 },
+  alertCard: { borderRadius: 14, padding: 16, borderLeftWidth: 4 },
+  alertHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   alertIcon: { fontSize: 16 },
-  alertTitle: { fontSize: 15, fontWeight: '700' },
-  alertDetail: { color: '#888', fontSize: 13, lineHeight: 20 },
-  chatContainer: { flex: 1 },
-  messages: { flex: 1 },
-  messagesContent: { padding: 20, paddingBottom: 8 },
-  hint: { color: '#555', textAlign: 'center', marginTop: 32, marginBottom: 20, fontSize: 14 },
-  quickBtns: { gap: 10 },
-  quickBtn: { backgroundColor: '#1a1a1a', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#2a2a2a' },
-  quickBtnTxt: { color: '#aaa', fontSize: 14 },
-  bubble: { borderRadius: 16, padding: 14, marginBottom: 12, maxWidth: '85%' },
-  userBubble: { backgroundColor: '#6366f1', alignSelf: 'flex-end' },
-  aiBubble: { backgroundColor: '#1a1a1a', alignSelf: 'flex-start' },
-  bubbleTxt: { color: '#fff', fontSize: 15, lineHeight: 22 },
-  inputRow: { flexDirection: 'row', padding: 16, gap: 12, borderTopWidth: 1, borderTopColor: '#222' },
-  input: { flex: 1, backgroundColor: '#1a1a1a', color: '#fff', borderRadius: 24, paddingHorizontal: 20, paddingVertical: 12, fontSize: 15 },
-  sendBtn: { backgroundColor: '#6366f1', borderRadius: 24, paddingHorizontal: 20, justifyContent: 'center' },
-  sendBtnTxt: { color: '#fff', fontWeight: '600' },
+  alertTitle: { fontSize: 14, fontWeight: '800' },
+  alertDetail: { color: '#374151', fontSize: 13, lineHeight: 20 },
+
+  // スケジュール
+  schedCard: { backgroundColor: '#fff', borderRadius: 14, padding: 16, flexDirection: 'row', gap: 16, borderWidth: 1, borderColor: '#E8EBF2' },
+  schedLeft: { alignItems: 'center', minWidth: 52 },
+  schedTime: { color: '#6366f1', fontSize: 18, fontWeight: '800' },
+  schedDur: { color: '#94A3B8', fontSize: 11, marginTop: 2 },
+  schedRight: { flex: 1, gap: 4 },
+  schedTask: { color: '#1A1D2E', fontSize: 15, fontWeight: '600' },
+  schedReason: { color: '#94A3B8', fontSize: 12 },
+
+  // チャット
+  chatWrap: { flex: 1 },
+  chatScroll: { flex: 1 },
+  chatContent: { padding: 20, paddingBottom: 8, gap: 12 },
+  chatHint: { color: '#94A3B8', textAlign: 'center', marginBottom: 16, fontSize: 13 },
+  quickList: { gap: 10 },
+  quickBtn: { backgroundColor: '#fff', borderRadius: 12, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E8EBF2' },
+  quickBtnTxt: { color: '#374151', fontSize: 14, flex: 1 },
+  quickArrow: { color: '#6366f1', fontSize: 16, fontWeight: '700' },
+  bubble: { borderRadius: 16, padding: 14, maxWidth: '85%' },
+  bubbleUser: { backgroundColor: '#6366f1', alignSelf: 'flex-end' },
+  bubbleAI: { backgroundColor: '#fff', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#E8EBF2' },
+  bubbleRole: { color: '#6366f1', fontSize: 10, fontWeight: '800', marginBottom: 4 },
+  bubbleTxt: { color: '#1A1D2E', fontSize: 14, lineHeight: 22 },
+  inputRow: { flexDirection: 'row', padding: 16, gap: 10, borderTopWidth: 1, borderTopColor: '#E8EBF2', backgroundColor: '#fff' },
+  input: { flex: 1, backgroundColor: '#F2F4F8', color: '#1A1D2E', borderRadius: 24, paddingHorizontal: 18, paddingVertical: 12, fontSize: 14, borderWidth: 1, borderColor: '#E2E8F0' },
+  sendBtn: { backgroundColor: '#6366f1', borderRadius: 24, paddingHorizontal: 18, justifyContent: 'center' },
+  sendBtnDisabled: { backgroundColor: '#C7D2FE' },
+  sendBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });
