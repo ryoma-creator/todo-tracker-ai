@@ -1,118 +1,125 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, ActivityIndicator, Platform } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { type TodoTask, parseNotes } from '../../lib/types';
 import TaskForm from '../../components/TaskForm';
 
-const STATUS_COLOR: Record<string, string> = {
-  pending: '#6366f1',
-  in_progress: '#f59e0b',
-  done: '#22c55e',
-  failed: '#ef4444',
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  pending: '未着手',
-  in_progress: '着手中',
-  done: '達成',
-  failed: '未達成',
-};
-
 const PRIORITY_LABEL = ['', '最低', '低', '中', '高', '最高'];
-
-const PRIORITY_STYLE: Record<number, { border: string; bg: string }> = {
-  5: { border: '#ef4444', bg: '#1a0a0a' },
-  4: { border: '#f97316', bg: '#1a0f0a' },
-  3: { border: '#6366f1', bg: '#1a1a1a' },
-  2: { border: '#22c55e', bg: '#0a1a0a' },
-  1: { border: '#374151', bg: '#111111' },
+const PRIORITY_COLOR: Record<number, { bg: string; text: string; border: string }> = {
+  5: { bg: '#FEE2E2', text: '#DC2626', border: '#FCA5A5' },
+  4: { bg: '#FEF3C7', text: '#D97706', border: '#FCD34D' },
+  3: { bg: '#EDE9FE', text: '#7C3AED', border: '#C4B5FD' },
+  2: { bg: '#DCFCE7', text: '#16A34A', border: '#86EFAC' },
+  1: { bg: '#F1F5F9', text: '#64748B', border: '#CBD5E1' },
+};
+const STATUS_COLOR: Record<string, { bg: string; text: string }> = {
+  pending:     { bg: '#F1F5F9', text: '#64748B' },
+  in_progress: { bg: '#FEF3C7', text: '#D97706' },
+  done:        { bg: '#DCFCE7', text: '#16A34A' },
+  failed:      { bg: '#FEE2E2', text: '#DC2626' },
+};
+const STATUS_LABEL: Record<string, string> = {
+  pending: '未着手', in_progress: '着手中', done: '達成', failed: '未達成',
 };
 
-function TaskCard({ task, onEdit, onDelete }: { task: TodoTask; onEdit: () => void; onDelete: () => void }) {
+function CheckBox({ done, onPress }: { done: boolean; onPress: () => void }) {
+  return (
+    <TouchableOpacity onPress={onPress} style={[cs.check, done && cs.checkDone]} activeOpacity={0.7}>
+      {done && <Text style={cs.checkMark}>✓</Text>}
+    </TouchableOpacity>
+  );
+}
+
+function TaskCard({ task, onEdit, onDelete, onToggleDone }: {
+  task: TodoTask;
+  onEdit: () => void;
+  onDelete: () => void;
+  onToggleDone: () => void;
+}) {
   const [confirmDel, setConfirmDel] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
-  const ps = PRIORITY_STYLE[task.priority] ?? PRIORITY_STYLE[3];
+  const isDone = task.status === 'done';
+  const pc = PRIORITY_COLOR[task.priority] ?? PRIORITY_COLOR[3];
+  const sc = STATUS_COLOR[task.status] ?? STATUS_COLOR['pending'];
   const notes = parseNotes(task.progress_notes);
 
   return (
-    <View style={[s.card, { backgroundColor: ps.bg, borderLeftColor: ps.border }]}>
-      <View style={s.cardHeader}>
-        <View style={s.badgeRow}>
-          <View style={[s.priorityBadge, { backgroundColor: ps.border }]}>
-            <Text style={s.priorityBadgeTxt}>{PRIORITY_LABEL[task.priority]}</Text>
-          </View>
-          <View style={[s.statusBadge, { borderColor: STATUS_COLOR[task.status] }]}>
-            <Text style={[s.statusText, { color: STATUS_COLOR[task.status] }]}>
-              {STATUS_LABEL[task.status]}
-            </Text>
-          </View>
-        </View>
-        <View style={s.cardActions}>
-          <TouchableOpacity style={s.editBtn} onPress={onEdit}>
-            <Text style={s.editBtnTxt}>編集</Text>
-          </TouchableOpacity>
-          {confirmDel ? (
-            <View style={s.confirmRow}>
-              <TouchableOpacity style={s.confirmYesBtn} onPress={onDelete}>
-                <Text style={s.confirmYesTxt}>削除</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setConfirmDel(false)}>
-                <Text style={s.confirmNo}>戻る</Text>
-              </TouchableOpacity>
+    <View style={[cs.card, isDone && cs.cardDone]}>
+      <View style={cs.cardMain}>
+        {/* チェックボックス */}
+        <CheckBox done={isDone} onPress={onToggleDone} />
+
+        {/* コンテンツ */}
+        <View style={cs.cardBody}>
+          {/* タイトル行 */}
+          <View style={cs.titleRow}>
+            <Text style={[cs.title, isDone && cs.titleDone]} numberOfLines={2}>{task.title}</Text>
+            <View style={[cs.priorityTag, { backgroundColor: pc.bg, borderColor: pc.border }]}>
+              <Text style={[cs.priorityTagTxt, { color: pc.text }]}>{PRIORITY_LABEL[task.priority]}</Text>
             </View>
-          ) : (
-            <TouchableOpacity style={s.deleteBtn} onPress={() => setConfirmDel(true)}>
-              <Text style={s.deleteBtnTxt}>削除</Text>
+          </View>
+
+          {/* 得られる価値 */}
+          {task.leverage && !isDone ? (
+            <Text style={cs.leverage} numberOfLines={2}>{task.leverage}</Text>
+          ) : null}
+
+          {/* メタ情報行 */}
+          <View style={cs.metaRow}>
+            <View style={[cs.statusTag, { backgroundColor: sc.bg }]}>
+              <Text style={[cs.statusTagTxt, { color: sc.text }]}>{STATUS_LABEL[task.status]}</Text>
+            </View>
+            {task.deadline_time ? (
+              <Text style={cs.metaChip}>⏰ {task.deadline_time}</Text>
+            ) : null}
+            {task.estimated_minutes ? (
+              <Text style={cs.metaChip}>
+                {task.estimated_minutes >= 60 ? `${task.estimated_minutes / 60}h` : `${task.estimated_minutes}m`}
+              </Text>
+            ) : null}
+            <View style={cs.spacer} />
+            <TouchableOpacity onPress={onEdit} style={cs.actionBtn}>
+              <Text style={cs.actionBtnTxt}>編集</Text>
+            </TouchableOpacity>
+            {confirmDel ? (
+              <>
+                <TouchableOpacity onPress={onDelete} style={[cs.actionBtn, cs.actionBtnRed]}>
+                  <Text style={[cs.actionBtnTxt, { color: '#DC2626' }]}>削除</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setConfirmDel(false)}>
+                  <Text style={cs.cancelTxt}>戻る</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity onPress={() => setConfirmDel(true)}>
+                <Text style={cs.deleteDot}>···</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* 着手中メモ */}
+          {task.status === 'in_progress' && notes.length > 0 && (
+            <TouchableOpacity onPress={() => setShowNotes(!showNotes)} style={cs.notesToggle}>
+              <Text style={cs.notesToggleTxt}>{showNotes ? '▲ メモを閉じる' : `▼ 進捗メモ ${notes.length}件`}</Text>
             </TouchableOpacity>
           )}
+          {task.status === 'in_progress' && showNotes && notes.map((n, i) => (
+            <View key={i} style={[cs.noteChip, n.type === 'stuck' ? cs.noteChipStuck : cs.noteChipDoing]}>
+              <Text style={cs.noteChipLabel}>{n.type === 'doing' ? '▶' : '⚠'}</Text>
+              <Text style={cs.noteChipBody}>{n.body}</Text>
+            </View>
+          ))}
+
+          {/* 達成/未達成の理由 */}
+          {task.status === 'done' && task.achieve_reason ? (
+            <Text style={cs.achieveReason}>✅ {task.achieve_reason}</Text>
+          ) : null}
+          {task.status === 'failed' && task.fail_reason ? (
+            <Text style={cs.failReason}>❌ {task.fail_reason}</Text>
+          ) : null}
         </View>
       </View>
-
-      <Text style={s.cardTitle}>{task.title}</Text>
-
-      {task.leverage ? (
-        <View style={s.leverageBox}>
-          <Text style={s.leverageLabel}>得られる価値</Text>
-          <Text style={s.leverageText}>{task.leverage}</Text>
-        </View>
-      ) : null}
-
-      <View style={s.cardFooter}>
-        <Text style={s.priorityTxt}>優先度: {PRIORITY_LABEL[task.priority]}</Text>
-        {task.deadline_time ? (
-          <Text style={s.deadlineTxt}>⏰ {task.deadline_time}まで</Text>
-        ) : task.due_date ? (
-          <Text style={s.dueTxt}>期限: {task.due_date}</Text>
-        ) : null}
-        {task.estimated_minutes ? (
-          <Text style={s.estimatedTxt}>
-            {task.estimated_minutes >= 60 ? `${task.estimated_minutes / 60}h` : `${task.estimated_minutes}m`}
-          </Text>
-        ) : null}
-      </View>
-
-      {/* 着手中メモ */}
-      {task.status === 'in_progress' && notes.length > 0 && (
-        <TouchableOpacity onPress={() => setShowNotes(!showNotes)} style={s.notesToggle}>
-          <Text style={s.notesToggleTxt}>
-            {showNotes ? '▲ メモを閉じる' : `▼ 進捗メモ ${notes.length}件`}
-          </Text>
-        </TouchableOpacity>
-      )}
-      {task.status === 'in_progress' && showNotes && notes.map((n, i) => (
-        <View key={i} style={[s.noteChip, n.type === 'stuck' ? s.noteChipStuck : s.noteChipDoing]}>
-          <Text style={s.noteChipLabel}>{n.type === 'doing' ? '▶' : '⚠'}</Text>
-          <Text style={s.noteChipBody}>{n.body}</Text>
-        </View>
-      ))}
-
-      {task.status === 'done' && task.achieve_reason ? (
-        <Text style={s.reasonTxt}>✅ {task.achieve_reason}</Text>
-      ) : null}
-      {task.status === 'failed' && task.fail_reason ? (
-        <Text style={[s.reasonTxt, s.failReason]}>❌ {task.fail_reason}</Text>
-      ) : null}
     </View>
   );
 }
@@ -127,13 +134,11 @@ export default function TodayScreen() {
 
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const todayJp = `${today.getMonth() + 1}月${today.getDate()}日（${'日月火水木金土'[today.getDay()]}）`;
 
   const loadTasks = useCallback(async () => {
     const { data, error } = await supabase
-      .from('todo_tasks')
-      .select('*')
-      .eq('date', todayStr)
-      .order('priority', { ascending: false });
+      .from('todo_tasks').select('*').eq('date', todayStr).order('priority', { ascending: false });
     if (error) setErrorMsg(error.message);
     if (data) setTasks(data as TodoTask[]);
     setLoading(false);
@@ -175,27 +180,47 @@ export default function TodayScreen() {
     else loadTasks();
   };
 
-  const doneCount = tasks.filter((t) => t.status === 'done').length;
-  const inProgressCount = tasks.filter((t) => t.status === 'in_progress').length;
-  const failedCount = tasks.filter((t) => t.status === 'failed').length;
+  const handleToggleDone = async (task: TodoTask) => {
+    const newStatus = task.status === 'done' ? 'pending' : 'done';
+    const { error } = await supabase.from('todo_tasks').update({ status: newStatus }).eq('id', task.id as string);
+    if (!error) loadTasks();
+  };
 
-  if (loading) return <ActivityIndicator style={{ flex: 1, backgroundColor: '#0f0f0f' }} color="#6366f1" />;
+  const doneCount = tasks.filter((t) => t.status === 'done').length;
+  const total = tasks.length;
+
+  if (loading) return <ActivityIndicator style={{ flex: 1, backgroundColor: '#F2F4F8' }} color="#6366f1" />;
 
   return (
     <View style={s.container}>
-      <ScrollView contentContainerStyle={s.content}>
+      <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
+
+        {/* ヘッダー */}
         <View style={s.header}>
           <View>
-            <Text style={s.dateText}>{todayStr}</Text>
-            <Text style={s.summaryText}>
-              {tasks.length}件 ／ 着手中 {inProgressCount} ／ 達成 {doneCount} ／ 未達成 {failedCount}
-            </Text>
+            <Text style={s.todayLabel}>今日のタスク</Text>
+            <Text style={s.todayDate}>{todayJp}</Text>
           </View>
-          <TouchableOpacity onPress={() => supabase.auth.signOut()}>
-            <Text style={s.logoutTxt}>ログアウト</Text>
-          </TouchableOpacity>
+          <View style={s.headerRight}>
+            {total > 0 && (
+              <View style={s.progressPill}>
+                <Text style={s.progressTxt}>{doneCount} / {total} 完了</Text>
+              </View>
+            )}
+            <TouchableOpacity onPress={() => supabase.auth.signOut()} style={s.logoutBtn}>
+              <Text style={s.logoutTxt}>ログアウト</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
+        {/* 進捗バー */}
+        {total > 0 && (
+          <View style={s.progressBar}>
+            <View style={[s.progressFill, { width: `${Math.round((doneCount / total) * 100)}%` as `${number}%` }]} />
+          </View>
+        )}
+
+        {/* エラー */}
         {errorMsg && (
           <View style={s.errorBanner}>
             <Text style={s.errorText}>❌ {errorMsg}</Text>
@@ -205,36 +230,54 @@ export default function TodayScreen() {
           </View>
         )}
 
-        {tasks.length === 0 && <Text style={s.empty}>今日のタスクはまだありません</Text>}
+        {tasks.length === 0 && (
+          <View style={s.emptyState}>
+            <Text style={s.emptyIcon}>✅</Text>
+            <Text style={s.emptyTitle}>今日のタスクはまだありません</Text>
+            <Text style={s.emptySub}>下のボタンから追加しよう</Text>
+          </View>
+        )}
 
+        {/* タスクカード */}
         {tasks.map((t) => (
-          <TaskCard key={t.id} task={t} onEdit={() => setEditTarget(t)} onDelete={() => handleDelete(t)} />
+          <TaskCard
+            key={t.id}
+            task={t}
+            onEdit={() => setEditTarget(t)}
+            onDelete={() => handleDelete(t)}
+            onToggleDone={() => handleToggleDone(t)}
+          />
         ))}
       </ScrollView>
 
-      <TouchableOpacity style={s.addBtn} onPress={() => setShowAdd(true)}>
-        <Text style={s.addBtnTxt}>+ タスクを追加</Text>
-      </TouchableOpacity>
+      {/* 追加ボタン */}
+      <View style={s.addBarShadow}>
+        <TouchableOpacity style={s.addBtn} onPress={() => setShowAdd(true)} activeOpacity={0.85}>
+          <Text style={s.addBtnTxt}>＋ タスクを追加</Text>
+        </TouchableOpacity>
+      </View>
 
+      {/* 追加モーダル */}
       <Modal visible={showAdd} animationType="slide" presentationStyle="pageSheet">
         <View style={s.modalContainer}>
           <View style={s.modalHeader}>
             <Text style={s.modalTitle}>新しいタスク</Text>
-            <TouchableOpacity onPress={() => setShowAdd(false)}>
-              <Text style={s.closeBtn}>✕</Text>
+            <TouchableOpacity onPress={() => setShowAdd(false)} style={s.modalClose}>
+              <Text style={s.modalCloseTxt}>✕</Text>
             </TouchableOpacity>
           </View>
           <TaskForm initial={{ date: todayStr }} onSave={handleAdd} saving={saving} onCancel={() => setShowAdd(false)} />
         </View>
       </Modal>
 
+      {/* 編集モーダル */}
       {editTarget && (
         <Modal visible animationType="slide" presentationStyle="pageSheet">
           <View style={s.modalContainer}>
             <View style={s.modalHeader}>
               <Text style={s.modalTitle}>タスクを編集</Text>
-              <TouchableOpacity onPress={() => setEditTarget(null)}>
-                <Text style={s.closeBtn}>✕</Text>
+              <TouchableOpacity onPress={() => setEditTarget(null)} style={s.modalClose}>
+                <Text style={s.modalCloseTxt}>✕</Text>
               </TouchableOpacity>
             </View>
             <TaskForm initial={editTarget} onSave={handleEdit} saving={saving} onCancel={() => setEditTarget(null)} />
@@ -245,55 +288,98 @@ export default function TodayScreen() {
   );
 }
 
-const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f0f0f' },
-  content: { padding: 20, paddingBottom: 100 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
-  errorBanner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#2a0a0a', borderRadius: 10, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#ef4444' },
-  errorText: { color: '#ef4444', fontSize: 13, flex: 1 },
-  errorClose: { color: '#ef4444', fontSize: 16, paddingLeft: 8 },
-  dateText: { color: '#6366f1', fontSize: 14, fontWeight: '700', marginBottom: 2 },
-  summaryText: { color: '#555', fontSize: 13 },
-  logoutTxt: { color: '#444', fontSize: 13, marginTop: 4 },
-  empty: { color: '#555', textAlign: 'center', marginTop: 60, fontSize: 15 },
-  card: { borderRadius: 16, padding: 16, marginBottom: 12, borderLeftWidth: 4 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  badgeRow: { flexDirection: 'row', gap: 6, alignItems: 'center' },
-  priorityBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-  priorityBadgeTxt: { color: '#fff', fontSize: 11, fontWeight: '700' },
-  statusBadge: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 3 },
-  statusText: { fontSize: 12, fontWeight: '600' },
-  cardActions: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  editBtn: { backgroundColor: '#2a2a3e', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4 },
-  editBtnTxt: { color: '#6366f1', fontSize: 12 },
-  deleteBtn: { backgroundColor: '#2a1a1a', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4 },
-  deleteBtnTxt: { color: '#ef4444', fontSize: 12 },
-  confirmRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  confirmYesBtn: { backgroundColor: '#ef4444', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
-  confirmYesTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  confirmNo: { color: '#555', fontSize: 12 },
-  cardTitle: { color: '#fff', fontSize: 17, fontWeight: '600', marginBottom: 8 },
-  leverageBox: { backgroundColor: '#111827', borderRadius: 10, padding: 12, marginBottom: 10, borderLeftWidth: 2, borderLeftColor: '#6366f1' },
-  leverageLabel: { color: '#6366f1', fontSize: 11, fontWeight: '700', marginBottom: 4 },
-  leverageText: { color: '#9ca3af', fontSize: 13, lineHeight: 20 },
-  cardFooter: { flexDirection: 'row', gap: 16 },
-  priorityTxt: { color: '#555', fontSize: 12 },
-  deadlineTxt: { color: '#ef4444', fontSize: 12, fontWeight: '600' },
-  dueTxt: { color: '#f59e0b', fontSize: 12 },
-  estimatedTxt: { color: '#6b7280', fontSize: 12 },
-  notesToggle: { marginTop: 10 },
-  notesToggleTxt: { color: '#f59e0b', fontSize: 12 },
+// ── CheckBox styles ──
+const cs = StyleSheet.create({
+  check: {
+    width: 24, height: 24, borderRadius: 12,
+    borderWidth: 2, borderColor: '#CBD5E1',
+    backgroundColor: '#fff',
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: 2,
+  },
+  checkDone: { backgroundColor: '#6366f1', borderColor: '#6366f1' },
+  checkMark: { color: '#fff', fontSize: 13, fontWeight: '800' },
+
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 10,
+    ...Platform.select({
+      ios: { shadowColor: '#6366f1', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
+      android: { elevation: 2 },
+      default: { boxShadow: '0px 2px 8px rgba(99, 102, 241, 0.06)' } as any,
+    }),
+  },
+  cardDone: { opacity: 0.65 },
+  cardMain: { flexDirection: 'row', gap: 12 },
+  cardBody: { flex: 1 },
+  titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 },
+  title: { flex: 1, color: '#1A1D2E', fontSize: 15, fontWeight: '600', lineHeight: 22 },
+  titleDone: { textDecorationLine: 'line-through', color: '#94A3B8' },
+  priorityTag: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  priorityTagTxt: { fontSize: 11, fontWeight: '700' },
+  leverage: { color: '#64748B', fontSize: 13, lineHeight: 19, marginBottom: 8 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  statusTag: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  statusTagTxt: { fontSize: 11, fontWeight: '600' },
+  metaChip: { color: '#64748B', fontSize: 12, fontWeight: '500' },
+  spacer: { flex: 1 },
+  actionBtn: { backgroundColor: '#F1F5F9', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 5 },
+  actionBtnRed: { backgroundColor: '#FEE2E2' },
+  actionBtnTxt: { color: '#6366f1', fontSize: 12, fontWeight: '600' },
+  cancelTxt: { color: '#94A3B8', fontSize: 12 },
+  deleteDot: { color: '#94A3B8', fontSize: 20, paddingHorizontal: 4, lineHeight: 20 },
+
+  notesToggle: { marginTop: 8 },
+  notesToggleTxt: { color: '#D97706', fontSize: 12, fontWeight: '600' },
   noteChip: { flexDirection: 'row', gap: 8, borderRadius: 8, padding: 10, marginTop: 6, borderLeftWidth: 2 },
-  noteChipDoing: { backgroundColor: '#1a1f2e', borderLeftColor: '#6366f1' },
-  noteChipStuck: { backgroundColor: '#1f1a0a', borderLeftColor: '#f59e0b' },
+  noteChipDoing: { backgroundColor: '#EDE9FE', borderLeftColor: '#6366f1' },
+  noteChipStuck: { backgroundColor: '#FEF3C7', borderLeftColor: '#F59E0B' },
   noteChipLabel: { fontSize: 13 },
-  noteChipBody: { color: '#ccc', fontSize: 13, flex: 1, lineHeight: 18 },
-  reasonTxt: { color: '#4ade80', fontSize: 13, marginTop: 8, lineHeight: 20 },
-  failReason: { color: '#f87171' },
-  addBtn: { position: 'absolute', bottom: 24, left: 20, right: 20, backgroundColor: '#6366f1', borderRadius: 14, padding: 18, alignItems: 'center' },
+  noteChipBody: { color: '#374151', fontSize: 13, flex: 1, lineHeight: 18 },
+  achieveReason: { color: '#16A34A', fontSize: 13, marginTop: 8, lineHeight: 20 },
+  failReason: { color: '#DC2626', fontSize: 13, marginTop: 8, lineHeight: 20 },
+});
+
+// ── Screen styles ──
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F2F4F8' },
+  content: { padding: 16, paddingBottom: 100 },
+
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
+  todayLabel: { color: '#1A1D2E', fontSize: 22, fontWeight: '800', marginBottom: 2 },
+  todayDate: { color: '#64748B', fontSize: 13, fontWeight: '500' },
+  headerRight: { alignItems: 'flex-end', gap: 6 },
+  progressPill: { backgroundColor: '#EDE9FE', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4 },
+  progressTxt: { color: '#6366f1', fontSize: 12, fontWeight: '700' },
+  logoutBtn: { paddingVertical: 2 },
+  logoutTxt: { color: '#94A3B8', fontSize: 12 },
+
+  progressBar: { height: 5, backgroundColor: '#E2E8F0', borderRadius: 3, marginBottom: 16 },
+  progressFill: { height: 5, backgroundColor: '#6366f1', borderRadius: 3 },
+
+  errorBanner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FEE2E2', borderRadius: 10, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#FCA5A5' },
+  errorText: { color: '#DC2626', fontSize: 13, flex: 1 },
+  errorClose: { color: '#DC2626', fontSize: 16, paddingLeft: 8 },
+
+  emptyState: { alignItems: 'center', paddingTop: 60, paddingBottom: 20 },
+  emptyIcon: { fontSize: 48, marginBottom: 12 },
+  emptyTitle: { color: '#1A1D2E', fontSize: 17, fontWeight: '700', marginBottom: 6 },
+  emptySub: { color: '#94A3B8', fontSize: 14 },
+
+  addBarShadow: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    paddingHorizontal: 16, paddingBottom: 24, paddingTop: 12,
+    backgroundColor: '#F2F4F8',
+    borderTopWidth: 1, borderTopColor: '#E8EBF2',
+  },
+  addBtn: { backgroundColor: '#6366f1', borderRadius: 14, padding: 16, alignItems: 'center' },
   addBtnTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  modalContainer: { flex: 1, backgroundColor: '#0f0f0f' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingBottom: 8 },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
-  closeBtn: { color: '#aaa', fontSize: 24, fontWeight: 'bold', paddingHorizontal: 4 },
+
+  modalContainer: { flex: 1, backgroundColor: '#fff' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: '#1A1D2E' },
+  modalClose: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  modalCloseTxt: { color: '#64748B', fontSize: 16, fontWeight: '700' },
 });
