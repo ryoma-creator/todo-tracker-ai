@@ -3,6 +3,14 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Switch
 import { type TodoTask, type ProgressNote, DEFAULT_TASK, parseNotes } from '../lib/types';
 
 const PRIORITY_LABELS = ['最低', '低', '中', '高', '最高'];
+const PRIORITY_COLORS = ['#9CA3AF', '#22C55E', '#4F46E5', '#F59E0B', '#EF4444'];
+
+const STATUS_CONFIG = [
+  { key: 'pending',     label: '未着手', bg: '#F1F5F9', text: '#64748B', activeBg: '#EEF2FF', activeText: '#4F46E5', activeBorder: '#6366F1' },
+  { key: 'in_progress', label: '着手中', bg: '#F1F5F9', text: '#64748B', activeBg: '#FEF3C7', activeText: '#D97706', activeBorder: '#F59E0B' },
+  { key: 'done',        label: '達成',   bg: '#F1F5F9', text: '#64748B', activeBg: '#DCFCE7', activeText: '#16A34A', activeBorder: '#22C55E' },
+  { key: 'failed',      label: '未達成', bg: '#F1F5F9', text: '#64748B', activeBg: '#FEE2E2', activeText: '#DC2626', activeBorder: '#EF4444' },
+] as const;
 
 type Props = {
   initial?: Partial<TodoTask>;
@@ -23,11 +31,7 @@ export default function TaskForm({ initial, onSave, saving, onCancel }: Props) {
 
   const addNote = () => {
     if (!noteBody.trim()) return;
-    const newNote: ProgressNote = {
-      ts: new Date().toISOString(),
-      type: noteType,
-      body: noteBody.trim(),
-    };
+    const newNote: ProgressNote = { ts: new Date().toISOString(), type: noteType, body: noteBody.trim() };
     update('progress_notes', JSON.stringify([...notes, newNote]));
     setNoteBody('');
   };
@@ -40,142 +44,182 @@ export default function TaskForm({ initial, onSave, saving, onCancel }: Props) {
   };
 
   return (
-    <ScrollView style={s.container} contentContainerStyle={s.content}>
+    <ScrollView style={s.container} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
 
-      <Text style={s.label}>タスク名 *</Text>
-      <TextInput
-        style={s.input}
-        value={task.title}
-        onChangeText={(v) => update('title', v)}
-        placeholder="何をやる？"
-        placeholderTextColor="#333"
-      />
-
-      <Text style={s.label}>詳細（任意）</Text>
-      <TextInput
-        style={[s.input, s.textarea]}
-        value={task.description}
-        onChangeText={(v) => update('description', v)}
-        placeholder="具体的な内容・手順など"
-        placeholderTextColor="#333"
-        multiline
-        numberOfLines={3}
-      />
-
-      <Text style={s.label}>やることでどんな価値がある？</Text>
-      <TextInput
-        style={[s.input, s.textarea]}
-        value={task.leverage}
-        onChangeText={(v) => update('leverage', v)}
-        placeholder="例：商談が1件決まれば30万円の売上。スキルが上がれば長期的に時給が上がる。"
-        placeholderTextColor="#333"
-        multiline
-        numberOfLines={3}
-      />
-
-      <Text style={s.label}>優先度</Text>
-      <View style={s.row}>
-        {PRIORITY_LABELS.map((label, i) => (
-          <TouchableOpacity
-            key={i}
-            style={[s.priorityBtn, task.priority === i + 1 && s.active]}
-            onPress={() => update('priority', i + 1)}
-          >
-            <Text style={[s.priorityTxt, task.priority === i + 1 && s.activeTxt]}>{label}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <Text style={s.label}>締め切り時刻（任意）</Text>
-      <TextInput
-        style={s.input}
-        value={task.deadline_time ?? ''}
-        onChangeText={(v) => update('deadline_time', v || null)}
-        placeholder="例: 18:00"
-        placeholderTextColor="#333"
-        keyboardType="numbers-and-punctuation"
-      />
-
-      <Text style={s.label}>想定所要時間（分）</Text>
-      <View style={s.minuteRow}>
-        {[15, 30, 60, 90, 120].map((min) => (
-          <TouchableOpacity
-            key={min}
-            style={[s.minuteBtn, task.estimated_minutes === min && s.active]}
-            onPress={() => update('estimated_minutes', task.estimated_minutes === min ? null : min)}
-          >
-            <Text style={[s.minuteTxt, task.estimated_minutes === min && s.activeTxt]}>
-              {min >= 60 ? `${min / 60}h` : `${min}m`}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <View style={s.toggleRow}>
-        <Text style={s.toggleLbl}>期限日を設定する</Text>
-        <Switch value={hasDueDate} onValueChange={toggleDueDate} trackColor={{ true: '#6366f1' }} thumbColor="#fff" />
-      </View>
-      {hasDueDate && (
+      {/* タスク名 */}
+      <View style={s.field}>
+        <Text style={s.label}>タスク名 <Text style={s.required}>*</Text></Text>
         <TextInput
           style={s.input}
-          value={task.due_date ?? ''}
-          onChangeText={(v) => update('due_date', v)}
-          placeholder="YYYY-MM-DD"
-          placeholderTextColor="#333"
+          value={task.title}
+          onChangeText={(v) => update('title', v)}
+          placeholder="何をやる？"
+          placeholderTextColor="#9CA3AF"
+        />
+      </View>
+
+      {/* 詳細 */}
+      <View style={s.field}>
+        <Text style={s.label}>詳細（任意）</Text>
+        <TextInput
+          style={[s.input, s.textarea]}
+          value={task.description}
+          onChangeText={(v) => update('description', v)}
+          placeholder="具体的な内容・手順など"
+          placeholderTextColor="#9CA3AF"
+          multiline
+          numberOfLines={3}
+          textAlignVertical="top"
+        />
+      </View>
+
+      {/* 得られる価値 */}
+      <View style={s.field}>
+        <Text style={s.label}>やることでどんな価値がある？</Text>
+        <TextInput
+          style={[s.input, s.textarea]}
+          value={task.leverage}
+          onChangeText={(v) => update('leverage', v)}
+          placeholder="例：amazonの試験に受かる可能性が上がる。スキルが上がれば長期的に時給が上がる。"
+          placeholderTextColor="#9CA3AF"
+          multiline
+          numberOfLines={3}
+          textAlignVertical="top"
+        />
+      </View>
+
+      {/* 優先度 */}
+      <View style={s.field}>
+        <Text style={s.label}>優先度</Text>
+        <View style={s.row}>
+          {PRIORITY_LABELS.map((label, i) => {
+            const active = task.priority === i + 1;
+            const color = PRIORITY_COLORS[i];
+            return (
+              <TouchableOpacity
+                key={i}
+                style={[s.segBtn, active && { backgroundColor: color + '18', borderColor: color }]}
+                onPress={() => update('priority', i + 1)}
+              >
+                {active && <View style={[s.segDot, { backgroundColor: color }]} />}
+                <Text style={[s.segTxt, active && { color, fontWeight: '700' }]}>{label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
+      {/* 締め切り時刻 */}
+      <View style={s.field}>
+        <Text style={s.label}>締め切り時刻（任意）</Text>
+        <TextInput
+          style={s.input}
+          value={task.deadline_time ?? ''}
+          onChangeText={(v) => update('deadline_time', v || null)}
+          placeholder="例: 18:00"
+          placeholderTextColor="#9CA3AF"
           keyboardType="numbers-and-punctuation"
         />
-      )}
+      </View>
 
-      {/* ステータス（編集時のみ） */}
+      {/* 所要時間 */}
+      <View style={s.field}>
+        <Text style={s.label}>想定所要時間（分）</Text>
+        <View style={s.row}>
+          {[15, 30, 60, 90, 120].map((min) => {
+            const active = task.estimated_minutes === min;
+            return (
+              <TouchableOpacity
+                key={min}
+                style={[s.segBtn, active && s.segBtnActive]}
+                onPress={() => update('estimated_minutes', active ? null : min)}
+              >
+                <Text style={[s.segTxt, active && s.segTxtActive]}>
+                  {min >= 60 ? `${min / 60}h` : `${min}m`}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
+      {/* 期限日 */}
+      <View style={s.field}>
+        <View style={s.toggleRow}>
+          <Text style={s.label} children="期限日を設定する" />
+          <Switch
+            value={hasDueDate}
+            onValueChange={toggleDueDate}
+            trackColor={{ false: '#E5E7EB', true: '#4F46E5' }}
+            thumbColor="#fff"
+          />
+        </View>
+        {hasDueDate && (
+          <TextInput
+            style={s.input}
+            value={task.due_date ?? ''}
+            onChangeText={(v) => update('due_date', v)}
+            placeholder="YYYY-MM-DD"
+            placeholderTextColor="#9CA3AF"
+            keyboardType="numbers-and-punctuation"
+          />
+        )}
+      </View>
+
+      {/* ステータス・理由（編集時のみ） */}
       {initial?.id && (
         <>
           <View style={s.divider} />
-          <Text style={s.label}>ステータス</Text>
-          <View style={s.row}>
-            {(['pending', 'in_progress', 'done', 'failed'] as const).map((st) => (
-              <TouchableOpacity
-                key={st}
-                style={[s.statusBtn, task.status === st && statusActive(st)]}
-                onPress={() => update('status', st)}
-              >
-                <Text style={[s.statusTxt, task.status === st && s.activeTxt]}>
-                  {st === 'pending' ? '未着手' : st === 'in_progress' ? '着手中' : st === 'done' ? '達成' : '未達成'}
-                </Text>
-              </TouchableOpacity>
-            ))}
+
+          <View style={s.field}>
+            <Text style={s.label}>ステータス</Text>
+            <View style={s.row}>
+              {STATUS_CONFIG.map((st) => {
+                const active = task.status === st.key;
+                return (
+                  <TouchableOpacity
+                    key={st.key}
+                    style={[s.statusBtn, active && { backgroundColor: st.activeBg, borderColor: st.activeBorder }]}
+                    onPress={() => update('status', st.key)}
+                  >
+                    <Text style={[s.statusTxt, active && { color: st.activeText, fontWeight: '700' }]}>{st.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
 
           {/* 着手中メモ */}
           {task.status === 'in_progress' && (
-            <>
+            <View style={s.field}>
               <Text style={s.label}>進捗メモ（追記式）</Text>
-
-              {/* 既存メモ一覧 */}
               {notes.length > 0 && (
                 <View style={s.noteList}>
                   {notes.map((n, i) => (
                     <View key={i} style={[s.noteItem, n.type === 'stuck' ? s.noteStuck : s.noteDoing]}>
-                      <Text style={s.noteTypeLabel}>{n.type === 'doing' ? '▶ やっていること' : '⚠ つまづき'}</Text>
+                      <Text style={[s.noteTypeLabel, n.type === 'stuck' ? { color: '#D97706' } : { color: '#4F46E5' }]}>
+                        {n.type === 'doing' ? '▶ やっていること' : '⚠ つまづき'}
+                      </Text>
                       <Text style={s.noteBody}>{n.body}</Text>
-                      <Text style={s.noteTs}>{new Date(n.ts).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</Text>
+                      <Text style={s.noteTs}>
+                        {new Date(n.ts).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </Text>
                     </View>
                   ))}
                 </View>
               )}
-
-              {/* 新規メモ入力 */}
               <View style={s.noteTypeRow}>
                 <TouchableOpacity
                   style={[s.noteTypeBtn, noteType === 'doing' && s.noteTypeBtnActive]}
                   onPress={() => setNoteType('doing')}
                 >
-                  <Text style={[s.noteTypeBtnTxt, noteType === 'doing' && s.activeTxt]}>▶ やっていること</Text>
+                  <Text style={[s.noteTypeBtnTxt, noteType === 'doing' && { color: '#4F46E5', fontWeight: '700' }]}>▶ やっていること</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[s.noteTypeBtn, noteType === 'stuck' && s.noteTypeBtnStuckActive]}
+                  style={[s.noteTypeBtn, noteType === 'stuck' && s.noteTypeBtnStuck]}
                   onPress={() => setNoteType('stuck')}
                 >
-                  <Text style={[s.noteTypeBtnTxt, noteType === 'stuck' && s.activeTxt]}>⚠ つまづき</Text>
+                  <Text style={[s.noteTypeBtnTxt, noteType === 'stuck' && { color: '#D97706', fontWeight: '700' }]}>⚠ つまづき</Text>
                 </TouchableOpacity>
               </View>
               <View style={s.noteInputRow}>
@@ -184,50 +228,54 @@ export default function TaskForm({ initial, onSave, saving, onCancel }: Props) {
                   value={noteBody}
                   onChangeText={setNoteBody}
                   placeholder={noteType === 'doing' ? '今何をやっているか...' : '何につまづいているか...'}
-                  placeholderTextColor="#333"
+                  placeholderTextColor="#9CA3AF"
                   multiline
+                  textAlignVertical="top"
                 />
                 <TouchableOpacity style={s.noteAddBtn} onPress={addNote}>
                   <Text style={s.noteAddTxt}>追加</Text>
                 </TouchableOpacity>
               </View>
-            </>
+            </View>
           )}
 
           {/* 達成理由 */}
           {task.status === 'done' && (
-            <>
+            <View style={s.field}>
               <Text style={s.label}>達成できた理由</Text>
               <TextInput
                 style={[s.input, s.textarea]}
                 value={task.achieve_reason}
                 onChangeText={(v) => update('achieve_reason', v)}
                 placeholder="なぜ達成できた？何が効いた？"
-                placeholderTextColor="#333"
+                placeholderTextColor="#9CA3AF"
                 multiline
                 numberOfLines={3}
+                textAlignVertical="top"
               />
-            </>
+            </View>
           )}
 
           {/* 未達成理由 */}
           {task.status === 'failed' && (
-            <>
+            <View style={s.field}>
               <Text style={s.label}>達成できなかった理由</Text>
               <TextInput
                 style={[s.input, s.textarea]}
                 value={task.fail_reason}
                 onChangeText={(v) => update('fail_reason', v)}
                 placeholder="なぜ達成できなかった？何がボトルネックだった？"
-                placeholderTextColor="#333"
+                placeholderTextColor="#9CA3AF"
                 multiline
                 numberOfLines={3}
+                textAlignVertical="top"
               />
-            </>
+            </View>
           )}
         </>
       )}
 
+      {/* ボタン */}
       <View style={s.btnRow}>
         {onCancel && (
           <TouchableOpacity style={s.cancelBtn} onPress={onCancel}>
@@ -235,7 +283,7 @@ export default function TaskForm({ initial, onSave, saving, onCancel }: Props) {
           </TouchableOpacity>
         )}
         <TouchableOpacity
-          style={[s.saveBtn, !task.title.trim() && s.saveBtnDisabled]}
+          style={[s.saveBtn, (!task.title.trim() || saving) && s.saveBtnDisabled]}
           onPress={() => onSave(task)}
           disabled={saving || !task.title.trim()}
         >
@@ -246,51 +294,63 @@ export default function TaskForm({ initial, onSave, saving, onCancel }: Props) {
   );
 }
 
-const statusActive = (st: string) => ({
-  backgroundColor: st === 'done' ? '#14532d' : st === 'failed' ? '#450a0a' : st === 'in_progress' ? '#451a03' : '#1e1b4b',
-  borderColor: st === 'done' ? '#22c55e' : st === 'failed' ? '#ef4444' : st === 'in_progress' ? '#f59e0b' : '#6366f1',
-});
-
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f0f0f' },
-  content: { padding: 24, paddingBottom: 56 },
-  label: { fontSize: 13, color: '#666', marginBottom: 8 },
-  input: { backgroundColor: '#1a1a1a', color: '#fff', borderRadius: 12, padding: 14, fontSize: 15, marginBottom: 20 },
-  textarea: { minHeight: 80, textAlignVertical: 'top' },
-  row: { flexDirection: 'row', gap: 6, marginBottom: 20, flexWrap: 'wrap' },
-  priorityBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: '#222', alignItems: 'center' },
-  priorityTxt: { color: '#444', fontSize: 11 },
-  active: { backgroundColor: '#6366f1', borderColor: '#6366f1' },
-  activeTxt: { color: '#fff', fontWeight: '600' },
-  minuteRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
-  minuteBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: '#222', alignItems: 'center' },
-  minuteTxt: { color: '#444', fontSize: 12 },
-  toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  toggleLbl: { fontSize: 15, color: '#ccc' },
-  divider: { height: 1, backgroundColor: '#1e1e1e', marginVertical: 20 },
-  statusBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: '#222', alignItems: 'center', minWidth: 70 },
-  statusTxt: { color: '#444', fontSize: 12 },
-  // 着手中メモ
-  noteList: { gap: 8, marginBottom: 16 },
+  container: { flex: 1, backgroundColor: '#fff' },
+  content: { padding: 24, paddingBottom: 48 },
+
+  field: { marginBottom: 20 },
+  label: { fontSize: 13, color: '#6B7280', fontWeight: '600', marginBottom: 8 },
+  required: { color: '#EF4444' },
+
+  input: {
+    backgroundColor: '#F9FAFB',
+    color: '#111827',
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  textarea: { minHeight: 88, textAlignVertical: 'top' },
+
+  row: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
+
+  segBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: '#E5E7EB', backgroundColor: '#F9FAFB' },
+  segBtnActive: { backgroundColor: '#EEF2FF', borderColor: '#6366F1' },
+  segDot: { width: 6, height: 6, borderRadius: 3 },
+  segTxt: { color: '#9CA3AF', fontSize: 12, fontWeight: '500' },
+  segTxtActive: { color: '#4F46E5', fontWeight: '700' },
+
+  toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+
+  divider: { height: 1, backgroundColor: '#F3F4F6', marginBottom: 20 },
+
+  statusBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: '#E5E7EB', alignItems: 'center', backgroundColor: '#F9FAFB' },
+  statusTxt: { color: '#9CA3AF', fontSize: 13, fontWeight: '500' },
+
+  noteList: { gap: 8, marginBottom: 12 },
   noteItem: { borderRadius: 10, padding: 12, borderLeftWidth: 3 },
-  noteDoing: { backgroundColor: '#1a1f2e', borderLeftColor: '#6366f1' },
-  noteStuck: { backgroundColor: '#1f1a0a', borderLeftColor: '#f59e0b' },
-  noteTypeLabel: { fontSize: 11, fontWeight: '700', marginBottom: 4, color: '#888' },
-  noteBody: { fontSize: 14, color: '#ddd', lineHeight: 20 },
-  noteTs: { fontSize: 11, color: '#444', marginTop: 4 },
+  noteDoing: { backgroundColor: '#EEF2FF', borderLeftColor: '#6366F1' },
+  noteStuck: { backgroundColor: '#FFFBEB', borderLeftColor: '#F59E0B' },
+  noteTypeLabel: { fontSize: 11, fontWeight: '700', marginBottom: 4 },
+  noteBody: { fontSize: 14, color: '#374151', lineHeight: 20 },
+  noteTs: { fontSize: 11, color: '#9CA3AF', marginTop: 4 },
+
   noteTypeRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
-  noteTypeBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#333', alignItems: 'center' },
-  noteTypeBtnActive: { backgroundColor: '#1e1b4b', borderColor: '#6366f1' },
-  noteTypeBtnStuckActive: { backgroundColor: '#451a03', borderColor: '#f59e0b' },
-  noteTypeBtnTxt: { color: '#555', fontSize: 12 },
-  noteInputRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start', marginBottom: 20 },
-  noteInput: { flex: 1, marginBottom: 0, minHeight: 60 },
-  noteAddBtn: { backgroundColor: '#6366f1', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 14, justifyContent: 'center' },
+  noteTypeBtn: { flex: 1, paddingVertical: 9, borderRadius: 8, borderWidth: 1.5, borderColor: '#E5E7EB', alignItems: 'center', backgroundColor: '#F9FAFB' },
+  noteTypeBtnActive: { backgroundColor: '#EEF2FF', borderColor: '#6366F1' },
+  noteTypeBtnStuck: { backgroundColor: '#FFFBEB', borderColor: '#F59E0B' },
+  noteTypeBtnTxt: { color: '#9CA3AF', fontSize: 12 },
+
+  noteInputRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  noteInput: { flex: 1, minHeight: 64 },
+  noteAddBtn: { backgroundColor: '#4F46E5', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 14, justifyContent: 'center' },
   noteAddTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
+
   btnRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
-  cancelBtn: { flex: 1, padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#333', alignItems: 'center' },
-  cancelTxt: { color: '#666', fontSize: 15 },
-  saveBtn: { flex: 2, backgroundColor: '#6366f1', borderRadius: 12, padding: 16, alignItems: 'center' },
-  saveBtnDisabled: { backgroundColor: '#2d2d4e', opacity: 0.5 },
-  saveTxt: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  cancelBtn: { flex: 1, padding: 16, borderRadius: 12, borderWidth: 1.5, borderColor: '#E5E7EB', alignItems: 'center', backgroundColor: '#F9FAFB' },
+  cancelTxt: { color: '#6B7280', fontSize: 15, fontWeight: '600' },
+  saveBtn: { flex: 2, backgroundColor: '#4F46E5', borderRadius: 12, padding: 16, alignItems: 'center' },
+  saveBtnDisabled: { backgroundColor: '#C7D2FE' },
+  saveTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });
