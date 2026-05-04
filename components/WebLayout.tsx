@@ -38,7 +38,7 @@ const STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> 
   failed:      { bg: '#FEE2E2', text: '#DC2626', label: '未達成' },
 };
 
-type NavKey = 'all' | 'today' | 'in_progress' | 'done' | 'important' | 'ai';
+type NavKey = 'all' | 'today' | 'in_progress' | 'done' | 'important' | 'ai' | 'review';
 type FilterKey = 'all' | 'active' | 'done';
 type AIChatMsg = { role: 'user' | 'assistant'; content: string };
 
@@ -114,8 +114,16 @@ function Sidebar({ nav, setNav, counts, onAdd, onLogout, userEmail }: {
           })}
         </View>
 
-        {/* AI分析 */}
+        {/* 振り返り・AI */}
         <View style={sb.divider} />
+        <TouchableOpacity
+          style={[sb.navItem, nav === 'review' && sb.navItemActive]}
+          onPress={() => setNav('review')}
+          activeOpacity={0.7}
+        >
+          <Text style={sb.navIcon}>🔍</Text>
+          <Text style={[sb.navLabel, nav === 'review' && sb.navLabelActive]}>振り返り</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[sb.aiBox, nav === 'ai' && sb.aiBoxActive]}
           onPress={() => setNav('ai')}
@@ -502,6 +510,177 @@ function DetailPanel({ task, onClose, onSave, onOpenModal, onDelete }: {
   );
 }
 
+// ── 振り返りパネル ────────────────────────────────────────────────
+type ReviewFilter = 'fail' | 'stuck' | 'achieve';
+
+function ReviewPanel() {
+  const [activeFilter, setActiveFilter] = useState<ReviewFilter>('fail');
+  const [failTasks, setFailTasks]     = useState<TodoTask[]>([]);
+  const [stuckItems, setStuckItems]   = useState<{ task: string; note: string; date: string; ts: string }[]>([]);
+  const [achieveTasks, setAchieveTasks] = useState<TodoTask[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      const { data } = await supabase
+        .from('todo_tasks')
+        .select('id,title,date,status,fail_reason,achieve_reason,progress_notes,priority')
+        .order('date', { ascending: false })
+        .limit(200);
+
+      if (!data) { setLoading(false); return; }
+
+      setFailTasks(data.filter((t) => t.status === 'failed' && t.fail_reason) as TodoTask[]);
+      setAchieveTasks(data.filter((t) => t.status === 'done' && t.achieve_reason) as TodoTask[]);
+
+      // progress_notes の中から type='stuck' のものを抽出
+      const stuck: typeof stuckItems = [];
+      for (const t of data) {
+        const notes = parseNotes(t.progress_notes);
+        for (const n of notes) {
+          if (n.type === 'stuck') {
+            stuck.push({ task: t.title, note: n.body, date: t.date, ts: n.ts });
+          }
+        }
+      }
+      stuck.sort((a, b) => b.ts.localeCompare(a.ts));
+      setStuckItems(stuck);
+      setLoading(false);
+    };
+    load();
+  }, []);
+
+  const TABS: { key: ReviewFilter; icon: string; label: string; count: number; color: string }[] = [
+    { key: 'fail',    icon: '❌', label: '未達成の理由',   count: failTasks.length,    color: '#DC2626' },
+    { key: 'stuck',   icon: '⚠️', label: 'つまづき',       count: stuckItems.length,   color: '#D97706' },
+    { key: 'achieve', icon: '✅', label: '達成できた理由',  count: achieveTasks.length, color: '#16A34A' },
+  ];
+
+  const activeTab = TABS.find((t) => t.key === activeFilter)!;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
+      {/* ヘッダー */}
+      <View style={rv.header}>
+        <Text style={rv.title}>振り返り</Text>
+        <Text style={rv.sub}>失敗・つまづき・成功から学ぶ</Text>
+      </View>
+
+      {/* フィルタータブ */}
+      <View style={rv.tabBar}>
+        {TABS.map((tab) => (
+          <TouchableOpacity
+            key={tab.key}
+            style={[rv.tab, activeFilter === tab.key && { borderBottomColor: tab.color }]}
+            onPress={() => setActiveFilter(tab.key)}
+          >
+            <Text style={rv.tabIcon}>{tab.icon}</Text>
+            <Text style={[rv.tabLabel, activeFilter === tab.key && { color: tab.color, fontWeight: '700' }]}>
+              {tab.label}
+            </Text>
+            <View style={[rv.tabBadge, { backgroundColor: tab.color + '18' }]}>
+              <Text style={[rv.tabBadgeTxt, { color: tab.color }]}>{tab.count}</Text>
+            </View>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {loading ? (
+        <ActivityIndicator style={{ marginTop: 60 }} color={C.primary} />
+      ) : (
+        <ScrollView contentContainerStyle={rv.list} showsVerticalScrollIndicator={false}>
+          {/* 未達成の理由 */}
+          {activeFilter === 'fail' && (
+            failTasks.length === 0 ? (
+              <View style={rv.empty}><Text style={rv.emptyTxt}>未達成タスクの記録がまだありません</Text></View>
+            ) : failTasks.map((t) => (
+              <View key={t.id} style={rv.card}>
+                <View style={rv.cardTop}>
+                  <View style={rv.failDot} />
+                  <Text style={rv.cardTitle}>{t.title}</Text>
+                  <Text style={rv.cardDate}>{t.date}</Text>
+                </View>
+                <View style={rv.reasonBox}>
+                  <Text style={rv.reasonLabel}>なぜ達成できなかったか</Text>
+                  <Text style={rv.failReason}>{t.fail_reason}</Text>
+                </View>
+              </View>
+            ))
+          )}
+
+          {/* つまづき */}
+          {activeFilter === 'stuck' && (
+            stuckItems.length === 0 ? (
+              <View style={rv.empty}><Text style={rv.emptyTxt}>つまづきメモがまだありません</Text></View>
+            ) : stuckItems.map((item, i) => (
+              <View key={i} style={rv.card}>
+                <View style={rv.cardTop}>
+                  <View style={rv.stuckDot} />
+                  <Text style={rv.cardTitle}>{item.task}</Text>
+                  <Text style={rv.cardDate}>{item.date}</Text>
+                </View>
+                <View style={rv.stuckBox}>
+                  <Text style={rv.reasonLabel}>つまづいた内容</Text>
+                  <Text style={rv.stuckReason}>{item.note}</Text>
+                </View>
+              </View>
+            ))
+          )}
+
+          {/* 達成できた理由 */}
+          {activeFilter === 'achieve' && (
+            achieveTasks.length === 0 ? (
+              <View style={rv.empty}><Text style={rv.emptyTxt}>達成タスクの記録がまだありません</Text></View>
+            ) : achieveTasks.map((t) => (
+              <View key={t.id} style={rv.card}>
+                <View style={rv.cardTop}>
+                  <View style={rv.achieveDot} />
+                  <Text style={rv.cardTitle}>{t.title}</Text>
+                  <Text style={rv.cardDate}>{t.date}</Text>
+                </View>
+                <View style={rv.achieveBox}>
+                  <Text style={rv.reasonLabel}>なぜ達成できたか</Text>
+                  <Text style={rv.achieveReason}>{t.achieve_reason}</Text>
+                </View>
+              </View>
+            ))
+          )}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+const rv = StyleSheet.create({
+  header: { padding: 24, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.panel },
+  title: { color: C.text, fontSize: 22, fontWeight: '800', marginBottom: 4 },
+  sub: { color: C.sub, fontSize: 13 },
+  tabBar: { flexDirection: 'row', backgroundColor: C.panel, borderBottomWidth: 1, borderBottomColor: C.border },
+  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tabIcon: { fontSize: 14 },
+  tabLabel: { fontSize: 12, color: C.muted, fontWeight: '500' },
+  tabBadge: { borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
+  tabBadgeTxt: { fontSize: 11, fontWeight: '700' },
+  list: { padding: 20, gap: 12 },
+  empty: { alignItems: 'center', paddingTop: 60 },
+  emptyTxt: { color: C.muted, fontSize: 14 },
+  card: { backgroundColor: C.panel, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: C.border, gap: 12 },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  failDot:    { width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444', flexShrink: 0 },
+  stuckDot:   { width: 10, height: 10, borderRadius: 5, backgroundColor: '#F59E0B', flexShrink: 0 },
+  achieveDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#22C55E', flexShrink: 0 },
+  cardTitle: { flex: 1, color: C.text, fontSize: 14, fontWeight: '600' },
+  cardDate: { color: C.muted, fontSize: 12, flexShrink: 0 },
+  reasonBox:  { backgroundColor: '#FEF2F2', borderRadius: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#EF4444' },
+  stuckBox:   { backgroundColor: '#FFFBEB', borderRadius: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#F59E0B' },
+  achieveBox: { backgroundColor: '#F0FDF4', borderRadius: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#22C55E' },
+  reasonLabel: { fontSize: 11, fontWeight: '700', color: C.muted, marginBottom: 6 },
+  failReason:    { color: '#374151', fontSize: 14, lineHeight: 22 },
+  stuckReason:   { color: '#374151', fontSize: 14, lineHeight: 22 },
+  achieveReason: { color: '#374151', fontSize: 14, lineHeight: 22 },
+});
+
 // ── AI診断パネル ──────────────────────────────────────────────────
 type AlertLevel = 'danger' | 'warning' | 'good';
 const LEVEL_STYLE: Record<AlertLevel, { bg: string; border: string; text: string; icon: string }> = {
@@ -734,7 +913,7 @@ export default function WebLayout() {
 
   const NAV_LABELS: Record<NavKey, string> = {
     all: 'すべてのタスク', today: '今日のタスク', in_progress: '着手中',
-    done: '完了したタスク', important: '重要なタスク', ai: 'AI診断',
+    done: '完了したタスク', important: '重要なタスク', ai: 'AI診断', review: '振り返り',
   };
   const FILTER_TABS: [FilterKey, string][] = [['all', 'すべて'], ['active', '未完了'], ['done', '完了']];
 
@@ -810,6 +989,8 @@ export default function WebLayout() {
       {/* ── メインコンテンツ ── */}
       {nav === 'ai' ? (
         <View style={w.main}><AIDiagPanel /></View>
+      ) : nav === 'review' ? (
+        <View style={w.main}><ReviewPanel /></View>
       ) : (
         <View style={w.main}>
           {/* ヘッダー */}
