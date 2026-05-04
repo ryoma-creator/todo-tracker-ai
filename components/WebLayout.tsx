@@ -262,37 +262,67 @@ function AIMiniChat({ task }: { task: TodoTask }) {
   );
 }
 
-// ── 詳細パネル ────────────────────────────────────────────────────
-function DetailPanel({ task, onClose, onEdit, onDelete, onStatusChange }: {
+// ── 詳細パネル（インライン編集対応） ─────────────────────────────
+const PRIORITY_LABELS_DP = ['最低', '低', '中', '高', '最高'];
+
+function DetailPanel({ task, onClose, onSave, onOpenModal, onDelete }: {
   task: TodoTask;
   onClose: () => void;
-  onEdit: () => void;
+  onSave: (t: TodoTask) => Promise<void>;
+  onOpenModal: () => void;
   onDelete: () => void;
-  onStatusChange: (s: string) => void;
 }) {
-  const ps = PRIORITY_STYLE[task.priority] ?? PRIORITY_STYLE[3];
+  const [local, setLocal] = useState<TodoTask>(task);
+  const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+
+  // タスクが切り替わったらローカル状態をリセット
+  useEffect(() => { setLocal(task); setConfirmDel(false); }, [task.id]);
+
+  const upd = <K extends keyof TodoTask>(key: K, val: TodoTask[K]) =>
+    setLocal((prev) => ({ ...prev, [key]: val }));
+
+  const isDirty = JSON.stringify(local) !== JSON.stringify(task);
+
+  const handleSave = async () => {
+    setSaving(true);
+    await onSave(local);
+    setSaving(false);
+  };
+
+  const notes = parseNotes(local.progress_notes);
 
   return (
     <View style={dp.wrap}>
       {/* ヘッダー */}
       <View style={dp.header}>
-        <Text style={dp.title} numberOfLines={3}>{task.title}</Text>
+        <View style={{ flex: 1, paddingRight: 12 }}>
+          <TextInput
+            style={dp.titleInput}
+            value={local.title}
+            onChangeText={(v) => upd('title', v)}
+            placeholder="タスク名"
+            placeholderTextColor={C.muted}
+            multiline
+          />
+        </View>
         <TouchableOpacity onPress={onClose} style={dp.closeBtn}>
           <Text style={dp.closeTxt}>✕</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView style={dp.scroll} contentContainerStyle={dp.scrollContent} showsVerticalScrollIndicator={false}>
+
         {/* ステータス */}
         <View style={dp.section}>
+          <Text style={dp.sectionTitle}>ステータス</Text>
           <View style={dp.statusRow}>
             {Object.entries(STATUS_STYLE).map(([key, val]) => {
-              const active = task.status === key;
+              const active = local.status === key;
               return (
                 <TouchableOpacity
                   key={key}
-                  onPress={() => onStatusChange(key)}
+                  onPress={() => upd('status', key as TodoTask['status'])}
                   style={[dp.statusBtn, active && { backgroundColor: val.bg, borderColor: val.text }]}
                 >
                   <Text style={[dp.statusBtnTxt, active && { color: val.text, fontWeight: '700' }]}>{val.label}</Text>
@@ -302,105 +332,171 @@ function DetailPanel({ task, onClose, onEdit, onDelete, onStatusChange }: {
           </View>
         </View>
 
-        {/* メタ情報グリッド */}
-        <View style={dp.metaGrid}>
-          <View style={dp.metaItem}>
-            <Text style={dp.metaLabel}>📅 期限</Text>
-            <Text style={[dp.metaVal, { color: task.deadline_time ? '#DC2626' : C.sub }]}>
-              {task.deadline_time ?? '未設定'}
-            </Text>
+        {/* 優先度 */}
+        <View style={dp.section}>
+          <Text style={dp.sectionTitle}>優先度</Text>
+          <View style={dp.priorityRow}>
+            {PRIORITY_LABELS_DP.map((label, i) => {
+              const level = i + 1;
+              const ps = PRIORITY_STYLE[level];
+              const active = local.priority === level;
+              return (
+                <TouchableOpacity
+                  key={level}
+                  onPress={() => upd('priority', level)}
+                  style={[dp.priorityBtn, active && { backgroundColor: ps.bg, borderColor: ps.dot }]}
+                >
+                  {active && <View style={[dp.priorityDot, { backgroundColor: ps.dot }]} />}
+                  <Text style={[dp.priorityBtnTxt, active && { color: ps.text, fontWeight: '700' }]}>{label}</Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
-          <View style={dp.metaItem}>
-            <Text style={dp.metaLabel}>🚩 優先度</Text>
-            <View style={[dp.metaBadge, { backgroundColor: ps.bg }]}>
-              <View style={[dp.metaDot, { backgroundColor: ps.dot }]} />
-              <Text style={[dp.metaBadgeTxt, { color: ps.text }]}>{PRIORITY_LABEL[task.priority]}</Text>
+        </View>
+
+        {/* 締切・見積もり */}
+        <View style={dp.twoCol}>
+          <View style={{ flex: 1 }}>
+            <Text style={dp.sectionTitle}>📅 締切時刻</Text>
+            <TextInput
+              style={dp.smallInput}
+              value={local.deadline_time ?? ''}
+              onChangeText={(v) => upd('deadline_time', v || null)}
+              placeholder="例: 18:00"
+              placeholderTextColor={C.muted}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={dp.sectionTitle}>⏱ 見積もり</Text>
+            <View style={dp.minRow}>
+              {[15, 30, 60, 90, 120].map((m) => {
+                const active = local.estimated_minutes === m;
+                return (
+                  <TouchableOpacity
+                    key={m}
+                    onPress={() => upd('estimated_minutes', active ? null : m)}
+                    style={[dp.minBtn, active && dp.minBtnActive]}
+                  >
+                    <Text style={[dp.minBtnTxt, active && dp.minBtnTxtActive]}>
+                      {m >= 60 ? `${m / 60}h` : `${m}m`}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
-          {task.estimated_minutes ? (
-            <View style={dp.metaItem}>
-              <Text style={dp.metaLabel}>⏱ 見積もり</Text>
-              <Text style={dp.metaVal}>
-                {task.estimated_minutes >= 60 ? `${task.estimated_minutes / 60}時間` : `${task.estimated_minutes}分`}
-              </Text>
-            </View>
-          ) : null}
+        </View>
+
+        {/* 得られる価値 */}
+        <View style={dp.section}>
+          <Text style={dp.sectionTitle}>得られる価値</Text>
+          <TextInput
+            style={[dp.fieldInput, dp.fieldInputMulti]}
+            value={local.leverage}
+            onChangeText={(v) => upd('leverage', v)}
+            placeholder="このタスクをやることでどんな価値がある？"
+            placeholderTextColor={C.muted}
+            multiline
+            textAlignVertical="top"
+          />
         </View>
 
         {/* 説明 */}
-        {task.description ? (
-          <View style={dp.section}>
-            <Text style={dp.sectionTitle}>説明</Text>
-            <Text style={dp.sectionBody}>{task.description}</Text>
-          </View>
-        ) : null}
+        <View style={dp.section}>
+          <Text style={dp.sectionTitle}>説明</Text>
+          <TextInput
+            style={[dp.fieldInput, dp.fieldInputMulti]}
+            value={local.description}
+            onChangeText={(v) => upd('description', v)}
+            placeholder="具体的な内容・手順など"
+            placeholderTextColor={C.muted}
+            multiline
+            textAlignVertical="top"
+          />
+        </View>
 
-        {/* 得られる価値 */}
-        {task.leverage ? (
-          <View style={dp.section}>
-            <Text style={dp.sectionTitle}>得られる価値</Text>
-            <View style={dp.leverageBox}>
-              <Text style={dp.leverageTxt}>{task.leverage}</Text>
-            </View>
-          </View>
-        ) : null}
-
-        {/* 進捗メモ */}
-        {(() => {
-          const notes = parseNotes(task.progress_notes);
-          if (!notes.length) return null;
-          return (
-            <View style={dp.section}>
-              <Text style={dp.sectionTitle}>進捗メモ</Text>
-              {notes.map((n, i) => (
-                <View key={i} style={[dp.noteChip, n.type === 'stuck' ? dp.noteChipWarn : dp.noteChipInfo]}>
-                  <Text style={dp.noteIcon}>{n.type === 'doing' ? '▶' : '⚠'}</Text>
-                  <Text style={dp.noteTxt}>{n.body}</Text>
-                </View>
-              ))}
-            </View>
-          );
-        })()}
-
-        {/* 未達成理由 */}
-        {task.status === 'failed' && task.fail_reason ? (
-          <View style={dp.section}>
-            <Text style={dp.sectionTitle}>❌ 達成できなかった理由</Text>
-            <View style={dp.failBox}><Text style={dp.failTxt}>{task.fail_reason}</Text></View>
-          </View>
-        ) : null}
-
-        {/* 達成理由 */}
-        {task.status === 'done' && task.achieve_reason ? (
+        {/* 達成/未達成の理由 */}
+        {local.status === 'done' && (
           <View style={dp.section}>
             <Text style={dp.sectionTitle}>✅ 達成できた理由</Text>
-            <View style={dp.achieveBox}><Text style={dp.achieveTxt}>{task.achieve_reason}</Text></View>
+            <TextInput
+              style={[dp.fieldInput, dp.fieldInputMulti, dp.achieveInput]}
+              value={local.achieve_reason}
+              onChangeText={(v) => upd('achieve_reason', v)}
+              placeholder="なぜ達成できた？何が効いた？"
+              placeholderTextColor="#86EFAC"
+              multiline
+              textAlignVertical="top"
+            />
           </View>
-        ) : null}
+        )}
+        {local.status === 'failed' && (
+          <View style={dp.section}>
+            <Text style={dp.sectionTitle}>❌ 達成できなかった理由</Text>
+            <TextInput
+              style={[dp.fieldInput, dp.fieldInputMulti, dp.failInput]}
+              value={local.fail_reason}
+              onChangeText={(v) => upd('fail_reason', v)}
+              placeholder="何がボトルネックだった？"
+              placeholderTextColor="#FCA5A5"
+              multiline
+              textAlignVertical="top"
+            />
+          </View>
+        )}
+
+        {/* 進捗メモ（表示のみ） */}
+        {notes.length > 0 && (
+          <View style={dp.section}>
+            <Text style={dp.sectionTitle}>進捗メモ</Text>
+            {notes.map((n, i) => (
+              <View key={i} style={[dp.noteChip, n.type === 'stuck' ? dp.noteChipWarn : dp.noteChipInfo]}>
+                <Text style={dp.noteIcon}>{n.type === 'doing' ? '▶' : '⚠'}</Text>
+                <Text style={dp.noteTxt}>{n.body}</Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* AI チャット */}
-        <AIMiniChat task={task} />
+        <AIMiniChat task={local} />
       </ScrollView>
 
-      {/* アクション */}
+      {/* アクションバー */}
       <View style={dp.actions}>
-        <TouchableOpacity style={dp.editBtn} onPress={onEdit}>
-          <Text style={dp.editTxt}>✏ 編集する</Text>
-        </TouchableOpacity>
-        {confirmDel ? (
-          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-            <TouchableOpacity style={dp.delConfirm} onPress={onDelete}>
-              <Text style={dp.delConfirmTxt}>削除する</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setConfirmDel(false)}>
-              <Text style={{ color: C.muted, fontSize: 13 }}>戻る</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity style={dp.delBtn} onPress={() => setConfirmDel(true)}>
-            <Text style={dp.delTxt}>削除</Text>
+        {/* 変更保存 or 変更なし表示 */}
+        {isDirty ? (
+          <TouchableOpacity style={dp.saveBtn} onPress={handleSave} disabled={saving}>
+            <Text style={dp.saveBtnTxt}>{saving ? '保存中...' : '変更を保存'}</Text>
           </TouchableOpacity>
+        ) : (
+          <View style={dp.savedIndicator}>
+            <Text style={dp.savedTxt}>✓ 保存済み</Text>
+          </View>
         )}
+
+        <View style={dp.actionRight}>
+          {/* モーダルで詳細編集 */}
+          <TouchableOpacity style={dp.modalEditBtn} onPress={onOpenModal}>
+            <Text style={dp.modalEditTxt}>⛶ 全画面編集</Text>
+          </TouchableOpacity>
+
+          {/* 削除 */}
+          {confirmDel ? (
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <TouchableOpacity style={dp.delConfirm} onPress={onDelete}>
+                <Text style={dp.delConfirmTxt}>削除</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setConfirmDel(false)}>
+                <Text style={{ color: C.muted, fontSize: 12 }}>戻る</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity style={dp.delBtn} onPress={() => setConfirmDel(true)}>
+              <Text style={dp.delTxt}>削除</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
     </View>
   );
@@ -652,8 +748,7 @@ export default function WebLayout() {
     setSaving(false);
   };
 
-  const handleEdit = async (task: TodoTask) => {
-    setSaving(true);
+  const updateTask = async (task: TodoTask) => {
     await supabase.from('todo_tasks').update({
       title: task.title, description: task.description, leverage: task.leverage,
       priority: task.priority, status: task.status,
@@ -661,8 +756,21 @@ export default function WebLayout() {
       due_date: task.due_date, deadline_time: task.deadline_time,
       estimated_minutes: task.estimated_minutes, progress_notes: task.progress_notes,
     }).eq('id', task.id as string);
+  };
+
+  // インライン保存（右パネルから）
+  const handleInlineSave = async (task: TodoTask) => {
+    await updateTask(task);
+    setSelected(task); // パネルの表示を更新
+    loadTasks();
+  };
+
+  // モーダル編集保存
+  const handleEdit = async (task: TodoTask) => {
+    setSaving(true);
+    await updateTask(task);
     setEditTarget(null);
-    setSelected(null);
+    setSelected(task); // 保存後もパネルを開いたまま
     loadTasks();
     setSaving(false);
   };
@@ -750,9 +858,9 @@ export default function WebLayout() {
           <DetailPanel
             task={selected}
             onClose={() => setSelected(null)}
-            onEdit={() => setEditTarget(selected)}
+            onSave={handleInlineSave}
+            onOpenModal={() => setEditTarget(selected)}
             onDelete={() => handleDelete(selected)}
-            onStatusChange={(s) => handleStatusChange(selected, s)}
           />
         ) : (
           <View style={w.panelEmpty}>
@@ -853,43 +961,50 @@ const tr = StyleSheet.create({
 // 詳細パネル
 const dp = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: C.panel },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 20, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: C.border },
-  title: { flex: 1, color: C.text, fontSize: 16, fontWeight: '800', lineHeight: 24, paddingRight: 12 },
-  closeBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: C.border },
+  titleInput: { color: C.text, fontSize: 16, fontWeight: '700', lineHeight: 24, padding: 0 },
+  closeBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   closeTxt: { color: C.sub, fontSize: 13, fontWeight: '700' },
   scroll: { flex: 1 },
-  scrollContent: { padding: 20, gap: 18 },
-  section: { gap: 8 },
-  sectionTitle: { color: C.sub, fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
-  sectionBody: { color: C.text, fontSize: 14, lineHeight: 22 },
-  statusRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  statusBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1.5, borderColor: C.border },
+  scrollContent: { padding: 16, gap: 16, paddingBottom: 8 },
+  section: { gap: 6 },
+  sectionTitle: { color: C.sub, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  statusRow: { flexDirection: 'row', gap: 5, flexWrap: 'wrap' },
+  statusBtn: { flex: 1, paddingVertical: 7, paddingHorizontal: 8, borderRadius: 8, borderWidth: 1.5, borderColor: C.border, alignItems: 'center', minWidth: 60 },
   statusBtnTxt: { fontSize: 12, color: C.muted, fontWeight: '500' },
-  metaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
-  metaItem: { gap: 4 },
-  metaLabel: { color: C.sub, fontSize: 12, fontWeight: '600' },
-  metaVal: { color: C.text, fontSize: 14, fontWeight: '600' },
-  metaBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  metaDot: { width: 7, height: 7, borderRadius: 4 },
-  metaBadgeTxt: { fontSize: 13, fontWeight: '700' },
-  leverageBox: { backgroundColor: '#F5F3FF', borderRadius: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: C.primary },
-  leverageTxt: { color: C.text, fontSize: 14, lineHeight: 22 },
+  priorityRow: { flexDirection: 'row', gap: 5, flexWrap: 'wrap' },
+  priorityBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 7, borderRadius: 8, borderWidth: 1.5, borderColor: C.border, minWidth: 44 },
+  priorityDot: { width: 6, height: 6, borderRadius: 3 },
+  priorityBtnTxt: { fontSize: 11, color: C.muted, fontWeight: '500' },
+  twoCol: { flexDirection: 'row', gap: 12 },
+  smallInput: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10, fontSize: 13, color: C.text, marginTop: 6 },
+  minRow: { flexDirection: 'row', gap: 4, flexWrap: 'wrap', marginTop: 6 },
+  minBtn: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: C.border, backgroundColor: '#F9FAFB' },
+  minBtnActive: { backgroundColor: '#EEF2FF', borderColor: C.primary },
+  minBtnTxt: { fontSize: 11, color: C.muted },
+  minBtnTxtActive: { color: C.primary, fontWeight: '700' },
+  fieldInput: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10, fontSize: 13, color: C.text },
+  fieldInputMulti: { minHeight: 72, textAlignVertical: 'top' },
+  achieveInput: { backgroundColor: '#F0FDF4', borderColor: '#86EFAC' },
+  failInput: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' },
   noteChip: { flexDirection: 'row', gap: 8, borderRadius: 8, padding: 10, borderLeftWidth: 2 },
   noteChipInfo: { backgroundColor: '#EEF2FF', borderLeftColor: C.primary },
   noteChipWarn: { backgroundColor: '#FFFBEB', borderLeftColor: '#F59E0B' },
   noteIcon: { fontSize: 13 },
   noteTxt: { flex: 1, color: C.text, fontSize: 13, lineHeight: 18 },
-  failBox: { backgroundColor: '#FEF2F2', borderRadius: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#EF4444' },
-  failTxt: { color: C.text, fontSize: 14, lineHeight: 22 },
-  achieveBox: { backgroundColor: '#F0FDF4', borderRadius: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#22C55E' },
-  achieveTxt: { color: C.text, fontSize: 14, lineHeight: 22 },
-  actions: { flexDirection: 'row', gap: 10, padding: 16, borderTopWidth: 1, borderTopColor: C.border, alignItems: 'center' },
-  editBtn: { flex: 1, backgroundColor: C.primary, borderRadius: 10, padding: 12, alignItems: 'center' },
-  editTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  delBtn: { backgroundColor: '#F3F4F6', borderRadius: 10, paddingHorizontal: 16, padding: 12 },
-  delTxt: { color: C.sub, fontSize: 13, fontWeight: '600' },
-  delConfirm: { backgroundColor: '#FEE2E2', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12 },
-  delConfirmTxt: { color: '#DC2626', fontWeight: '700', fontSize: 13 },
+  // アクションバー
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderTopWidth: 1, borderTopColor: C.border },
+  saveBtn: { flex: 1, backgroundColor: C.primary, borderRadius: 10, padding: 11, alignItems: 'center' },
+  saveBtnTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  savedIndicator: { flex: 1, alignItems: 'center', paddingVertical: 11 },
+  savedTxt: { color: '#16A34A', fontSize: 13, fontWeight: '600' },
+  actionRight: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  modalEditBtn: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
+  modalEditTxt: { color: C.sub, fontSize: 12, fontWeight: '600' },
+  delBtn: { backgroundColor: '#FEE2E2', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
+  delTxt: { color: '#DC2626', fontSize: 12, fontWeight: '600' },
+  delConfirm: { backgroundColor: '#FEE2E2', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9 },
+  delConfirmTxt: { color: '#DC2626', fontWeight: '700', fontSize: 12 },
 });
 
 // AI mini chat
