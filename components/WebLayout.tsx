@@ -5,22 +5,29 @@ import {
 } from 'react-native';
 import OpenAI from 'openai';
 import { supabase } from '../lib/supabase';
-import { type TodoTask, DEFAULT_TASK, parseNotes } from '../lib/types';
+import { type TodoTask, DEFAULT_TASK, parseNotes, CATEGORIES, CATEGORY_COLOR } from '../lib/types';
 import TaskForm from './TaskForm';
 
 // ── 定数 ─────────────────────────────────────────────────────────
 const C = {
-  bg:        '#F8FAFC',
+  bg:        '#F7F8FA',
   sidebar:   '#FFFFFF',
   panel:     '#FFFFFF',
   card:      '#FFFFFF',
-  border:    '#E5E7EB',
-  primary:   '#4F46E5',
+  border:    '#E4E7EC',
+  borderLight: '#F2F4F7',
+  primary:   '#5B4CF5',
   primaryBg: '#EEF2FF',
-  text:      '#111827',
-  sub:       '#6B7280',
-  muted:     '#9CA3AF',
-  done:      '#D1D5DB',
+  text:      '#101828',
+  sub:       '#475467',
+  muted:     '#98A2B3',
+  done:      '#D0D5DD',
+  success:   '#12B76A',
+  successBg: '#ECFDF3',
+  warn:      '#F79009',
+  warnBg:    '#FFFAEB',
+  danger:    '#F04438',
+  dangerBg:  '#FEF3F2',
 };
 
 const PRIORITY_LABEL = ['', '最低', '低', '中', '高', '最高'];
@@ -38,7 +45,7 @@ const STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> 
   failed:      { bg: '#FEE2E2', text: '#DC2626', label: '未達成' },
 };
 
-type NavKey = 'all' | 'today' | 'in_progress' | 'done' | 'important' | 'ai' | 'review' | 'calendar' | 'templates';
+type NavKey = 'all' | 'today' | 'in_progress' | 'done' | 'important' | 'ai' | 'review' | 'calendar' | 'templates' | 'growth';
 type FilterKey = 'all' | 'active' | 'done';
 type AIChatMsg = { role: 'user' | 'assistant'; content: string };
 
@@ -60,30 +67,59 @@ function relDate(dateStr: string) {
 }
 
 // ── サイドバー ────────────────────────────────────────────────────
-function Sidebar({ nav, setNav, counts, onAdd, onLogout, userEmail }: {
+function Sidebar({ nav, setNav, counts, onAdd, onLogout, userEmail, categoryFilter, setCategoryFilter }: {
   nav: NavKey;
   setNav: (n: NavKey) => void;
   counts: Record<string, number>;
   onAdd: () => void;
   onLogout: () => void;
   userEmail: string;
+  categoryFilter: string | null;
+  setCategoryFilter: (c: string | null) => void;
 }) {
-  const navItems: { key: NavKey; icon: string; label: string; countKey: string }[] = [
-    { key: 'all',         icon: '📋', label: 'すべてのタスク',  countKey: 'all' },
-    { key: 'today',       icon: '📅', label: '今日のタスク',    countKey: 'today' },
-    { key: 'in_progress', icon: '🔄', label: '着手中',          countKey: 'in_progress' },
-    { key: 'done',        icon: '✅', label: '完了したタスク',   countKey: 'done' },
-    { key: 'important',   icon: '⭐', label: '重要なタスク',    countKey: 'important' },
-    { key: 'calendar',    icon: '📆', label: 'カレンダー',       countKey: 'all' },
-    { key: 'templates',   icon: '🏆', label: '殿堂入り',         countKey: 'templates' },
+  const viewItems: { key: NavKey; icon: string; label: string; countKey: string }[] = [
+    { key: 'all',         icon: '◻', label: 'すべて',       countKey: 'all' },
+    { key: 'today',       icon: '◈', label: '今日',         countKey: 'today' },
+    { key: 'in_progress', icon: '◑', label: '着手中',       countKey: 'in_progress' },
+    { key: 'done',        icon: '◉', label: '完了',         countKey: 'done' },
+    { key: 'important',   icon: '◆', label: '重要',         countKey: 'important' },
   ];
+
+  const toolItems: { key: NavKey; icon: string; label: string; countKey: string }[] = [
+    { key: 'calendar',    icon: '⊞', label: 'カレンダー',   countKey: 'all' },
+    { key: 'templates',   icon: '⊙', label: '殿堂入り',     countKey: 'templates' },
+    { key: 'growth',      icon: '⊿', label: '成長記録',     countKey: 'all' },
+    { key: 'review',      icon: '⊛', label: '振り返り',     countKey: 'all' },
+  ];
+
+  const NavItem = ({ item, active }: { item: typeof viewItems[0]; active: boolean }) => {
+    const count = counts[item.countKey] ?? 0;
+    return (
+      <TouchableOpacity
+        style={[sb.navItem, active && sb.navItemActive]}
+        onPress={() => { setNav(item.key); setCategoryFilter(null); }}
+        activeOpacity={0.7}
+      >
+        <Text style={[sb.navIcon, active && { color: C.primary }]}>{item.icon}</Text>
+        <Text style={[sb.navLabel, active && sb.navLabelActive]}>{item.label}</Text>
+        {count > 0 && (
+          <View style={[sb.navBadge, active && sb.navBadgeActive]}>
+            <Text style={[sb.navBadgeTxt, active && sb.navBadgeTxtActive]}>{count}</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={sb.wrap}>
       {/* ロゴ */}
       <View style={sb.logo}>
         <View style={sb.logoIcon}><Text style={sb.logoIconTxt}>✓</Text></View>
-        <Text style={sb.logoTxt}>Todo Tracker</Text>
+        <View>
+          <Text style={sb.logoTxt}>Todo Tracker</Text>
+          <Text style={sb.logoSub}>タスク管理 & 成長記録</Text>
+        </View>
       </View>
 
       {/* 追加ボタン */}
@@ -91,24 +127,34 @@ function Sidebar({ nav, setNav, counts, onAdd, onLogout, userEmail }: {
         <Text style={sb.addBtnTxt}>＋ 新しいタスク</Text>
       </TouchableOpacity>
 
-      {/* ナビ */}
       <ScrollView style={sb.navScroll} showsVerticalScrollIndicator={false}>
+        {/* VIEWS */}
+        <Text style={sb.sectionHeader}>VIEWS</Text>
         <View style={sb.section}>
-          {navItems.map(({ key, icon, label, countKey }) => {
-            const active = nav === key;
-            const count = counts[countKey] ?? 0;
+          {viewItems.map((item) => (
+            <NavItem key={item.key} item={item} active={nav === item.key && !categoryFilter} />
+          ))}
+        </View>
+
+        {/* CATEGORIES */}
+        <Text style={sb.sectionHeader}>CATEGORIES</Text>
+        <View style={sb.section}>
+          {CATEGORIES.map((cat) => {
+            const col = CATEGORY_COLOR[cat];
+            const count = counts[`cat_${cat}`] ?? 0;
+            const active = categoryFilter === cat;
             return (
               <TouchableOpacity
-                key={key}
-                style={[sb.navItem, active && sb.navItemActive]}
-                onPress={() => setNav(key)}
+                key={cat}
+                style={[sb.navItem, active && { backgroundColor: col.bg }]}
+                onPress={() => { setCategoryFilter(active ? null : cat); setNav('all'); }}
                 activeOpacity={0.7}
               >
-                <Text style={sb.navIcon}>{icon}</Text>
-                <Text style={[sb.navLabel, active && sb.navLabelActive]}>{label}</Text>
+                <View style={[sb.catDot, { backgroundColor: col.color }]} />
+                <Text style={[sb.navLabel, active && { color: col.color, fontWeight: '700' }]}>{cat}</Text>
                 {count > 0 && (
-                  <View style={[sb.navBadge, active && sb.navBadgeActive]}>
-                    <Text style={[sb.navBadgeTxt, active && sb.navBadgeTxtActive]}>{count}</Text>
+                  <View style={[sb.navBadge, active && { backgroundColor: col.color + '20' }]}>
+                    <Text style={[sb.navBadgeTxt, active && { color: col.color }]}>{count}</Text>
                   </View>
                 )}
               </TouchableOpacity>
@@ -116,27 +162,28 @@ function Sidebar({ nav, setNav, counts, onAdd, onLogout, userEmail }: {
           })}
         </View>
 
-        {/* 振り返り・AI */}
-        <View style={sb.divider} />
-        <TouchableOpacity
-          style={[sb.navItem, nav === 'review' && sb.navItemActive]}
-          onPress={() => setNav('review')}
-          activeOpacity={0.7}
-        >
-          <Text style={sb.navIcon}>🔍</Text>
-          <Text style={[sb.navLabel, nav === 'review' && sb.navLabelActive]}>振り返り</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[sb.aiBox, nav === 'ai' && sb.aiBoxActive]}
-          onPress={() => setNav('ai')}
-          activeOpacity={0.8}
-        >
-          <View style={sb.aiBoxHeader}>
-            <Text style={sb.aiBoxIcon}>✦</Text>
-            <Text style={[sb.aiBoxTitle, nav === 'ai' && { color: C.primary }]}>AI 診断</Text>
-          </View>
-          <Text style={sb.aiBoxSub}>タスクをAIが分析・改善</Text>
-        </TouchableOpacity>
+        {/* TOOLS */}
+        <Text style={sb.sectionHeader}>TOOLS</Text>
+        <View style={sb.section}>
+          {toolItems.map((item) => (
+            <NavItem key={item.key} item={item} active={nav === item.key} />
+          ))}
+        </View>
+
+        {/* AI */}
+        <View style={{ paddingHorizontal: 8, paddingBottom: 8 }}>
+          <TouchableOpacity
+            style={[sb.aiBox, nav === 'ai' && sb.aiBoxActive]}
+            onPress={() => setNav('ai')}
+            activeOpacity={0.8}
+          >
+            <View style={sb.aiBoxHeader}>
+              <Text style={sb.aiBoxIcon}>✦</Text>
+              <Text style={[sb.aiBoxTitle, nav === 'ai' && { color: C.primary }]}>AI 診断</Text>
+            </View>
+            <Text style={sb.aiBoxSub}>パターン分析・スケジュール最適化</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
 
       {/* ユーザー */}
@@ -184,6 +231,16 @@ function TaskRow({ task, selected, onSelect, onToggleDone, onDuplicate }: {
 
       {/* タイトル */}
       <Text style={[tr.title, isDone && tr.titleDone]} numberOfLines={1}>{task.title}</Text>
+
+      {/* カテゴリーピル */}
+      {task.category && task.category !== 'その他' && (() => {
+        const col = CATEGORY_COLOR[task.category] ?? { color: '#64748B', bg: '#F1F5F9' };
+        return (
+          <View style={[tr.catPill, { backgroundColor: col.bg }]}>
+            <Text style={[tr.catPillTxt, { color: col.color }]}>{task.category}</Text>
+          </View>
+        );
+      })()}
 
       {/* 優先度バッジ */}
       <View style={[tr.priorityBadge, { backgroundColor: ps.bg }]}>
@@ -335,6 +392,27 @@ function DetailPanel({ task, onClose, onSave, onOpenModal, onDelete, onDuplicate
 
       <ScrollView style={dp.scroll} contentContainerStyle={dp.scrollContent} showsVerticalScrollIndicator={false}>
 
+        {/* カテゴリー */}
+        <View style={dp.section}>
+          <Text style={dp.sectionTitle}>カテゴリー</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 4 }}>
+            {CATEGORIES.map((cat) => {
+              const active = (local.category ?? 'その他') === cat;
+              const col = CATEGORY_COLOR[cat];
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  onPress={() => upd('category', cat)}
+                  style={[dp.catBtn, active && { backgroundColor: col.bg, borderColor: col.color }]}
+                >
+                  {active && <View style={[dp.catDot, { backgroundColor: col.color }]} />}
+                  <Text style={[dp.catTxt, active && { color: col.color, fontWeight: '700' }]}>{cat}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
         {/* ステータス */}
         <View style={dp.section}>
           <Text style={dp.sectionTitle}>ステータス</Text>
@@ -407,6 +485,39 @@ function DetailPanel({ task, onClose, onSave, onOpenModal, onDelete, onDuplicate
               })}
             </View>
           </View>
+        </View>
+
+        {/* 実際にかかった時間 */}
+        <View style={dp.section}>
+          <Text style={dp.sectionTitle}>⏱ 実際にかかった時間</Text>
+          <View style={dp.minRow}>
+            {[15, 30, 45, 60, 90, 120, 150, 180].map((m) => {
+              const active = local.actual_minutes === m;
+              return (
+                <TouchableOpacity
+                  key={m}
+                  onPress={() => upd('actual_minutes', active ? null : m)}
+                  style={[dp.minBtn, active && dp.actualBtnActive]}
+                >
+                  <Text style={[dp.minBtnTxt, active && dp.actualBtnTxtActive]}>
+                    {m >= 60 ? (m % 60 === 0 ? `${m / 60}h` : `${Math.floor(m/60)}h${m%60}m`) : `${m}m`}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          {local.estimated_minutes && local.actual_minutes && (
+            <View style={dp.timeCompare}>
+              <Text style={dp.timeCompareTxt}>
+                見積もり {local.estimated_minutes >= 60 ? `${local.estimated_minutes/60}h` : `${local.estimated_minutes}m`}
+                {' → '}実績 {local.actual_minutes >= 60 ? `${local.actual_minutes/60}h` : `${local.actual_minutes}m`}
+                {'  '}
+                <Text style={{ color: local.actual_minutes > local.estimated_minutes ? C.danger : C.success, fontWeight: '700' }}>
+                  {local.actual_minutes > local.estimated_minutes ? `+${local.actual_minutes - local.estimated_minutes}m オーバー` : `${local.estimated_minutes - local.actual_minutes}m 短縮 ✓`}
+                </Text>
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* 得られる価値 */}
@@ -888,6 +999,206 @@ const tpl = StyleSheet.create({
   removeTxt: { color: C.sub, fontSize: 12, fontWeight: '600' },
 });
 
+// ──────────────────────────────────────────────────────────
+// GrowthPanel（成長記録）
+// ──────────────────────────────────────────────────────────
+type GrowthItem = {
+  taskId: string;
+  taskTitle: string;
+  category: string;
+  date: string;
+  stuckNote: string;
+  ts: string;
+  outcome: 'done' | 'failed' | 'in_progress' | 'pending';
+};
+
+function GrowthPanel() {
+  const [items, setItems]           = useState<GrowthItem[]>([]);
+  const [loading, setLoading]       = useState(true);
+  const [catFilter, setCatFilter]   = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase
+        .from('todo_tasks')
+        .select('id,title,category,date,status,progress_notes')
+        .order('date', { ascending: false });
+      const result: GrowthItem[] = [];
+      if (data) {
+        for (const t of data) {
+          try {
+            const notes = JSON.parse(t.progress_notes ?? '[]');
+            for (const n of notes) {
+              if (n.type === 'stuck') {
+                result.push({
+                  taskId: t.id,
+                  taskTitle: t.title,
+                  category: t.category ?? 'その他',
+                  date: t.date,
+                  stuckNote: n.body,
+                  ts: n.ts,
+                  outcome: t.status,
+                });
+              }
+            }
+          } catch { /* skip */ }
+        }
+      }
+      result.sort((a, b) => b.ts.localeCompare(a.ts));
+      setItems(result);
+      setLoading(false);
+    };
+    load();
+  }, []);
+
+  const displayed = catFilter ? items.filter((i) => i.category === catFilter) : items;
+
+  const overcame = displayed.filter((i) => i.outcome === 'done').length;
+  const total    = displayed.length;
+
+  const OUTCOME_STYLE: Record<string, { label: string; color: string; bg: string }> = {
+    done:        { label: '克服 ✓', color: '#059669', bg: '#ECFDF5' },
+    failed:      { label: '未達成',  color: '#DC2626', bg: '#FEF2F2' },
+    in_progress: { label: '継続中',  color: '#D97706', bg: '#FFFBEB' },
+    pending:     { label: '未着手',  color: '#6B7280', bg: '#F1F5F9' },
+  };
+
+  if (loading) return <ActivityIndicator color={C.primary} style={{ marginTop: 60 }} />;
+
+  return (
+    <ScrollView style={{ flex: 1, backgroundColor: C.bg }} contentContainerStyle={{ paddingBottom: 48 }} showsVerticalScrollIndicator={false}>
+      {/* ヘッダー */}
+      <View style={gr.header}>
+        <Text style={gr.title}>成長記録</Text>
+        <Text style={gr.sub}>つまづきから何を学び、どう乗り越えたか</Text>
+        {total > 0 && (
+          <View style={gr.statsRow}>
+            <View style={gr.statCard}>
+              <Text style={gr.statNum}>{total}</Text>
+              <Text style={gr.statLabel}>総つまづき数</Text>
+            </View>
+            <View style={[gr.statCard, { backgroundColor: C.successBg }]}>
+              <Text style={[gr.statNum, { color: C.success }]}>{overcame}</Text>
+              <Text style={gr.statLabel}>克服済み</Text>
+            </View>
+            <View style={[gr.statCard, { backgroundColor: '#EEF2FF' }]}>
+              <Text style={[gr.statNum, { color: C.primary }]}>{total > 0 ? Math.round(overcame / total * 100) : 0}%</Text>
+              <Text style={gr.statLabel}>克服率</Text>
+            </View>
+          </View>
+        )}
+      </View>
+
+      {/* カテゴリーフィルター */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={gr.filterScroll} contentContainerStyle={gr.filterContent}>
+        <TouchableOpacity
+          style={[gr.filterChip, !catFilter && gr.filterChipActive]}
+          onPress={() => setCatFilter(null)}
+        >
+          <Text style={[gr.filterChipTxt, !catFilter && { color: C.primary, fontWeight: '700' }]}>すべて ({items.length})</Text>
+        </TouchableOpacity>
+        {CATEGORIES.map((cat) => {
+          const count = items.filter((i) => i.category === cat).length;
+          if (count === 0) return null;
+          const col = CATEGORY_COLOR[cat];
+          const active = catFilter === cat;
+          return (
+            <TouchableOpacity
+              key={cat}
+              style={[gr.filterChip, active && { backgroundColor: col.bg, borderColor: col.color }]}
+              onPress={() => setCatFilter(active ? null : cat)}
+            >
+              <View style={[gr.filterDot, { backgroundColor: col.color }]} />
+              <Text style={[gr.filterChipTxt, active && { color: col.color, fontWeight: '700' }]}>{cat} ({count})</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* タイムライン */}
+      {displayed.length === 0 ? (
+        <View style={gr.empty}>
+          <Text style={gr.emptyIcon}>📈</Text>
+          <Text style={gr.emptyTxt}>つまづき記録がまだありません</Text>
+          <Text style={gr.emptyHint}>タスク着手中に「⚠ つまづき」メモを追加すると記録されます</Text>
+        </View>
+      ) : (
+        <View style={gr.timeline}>
+          {displayed.map((item, idx) => {
+            const col = CATEGORY_COLOR[item.category] ?? { color: '#64748B', bg: '#F1F5F9' };
+            const out = OUTCOME_STYLE[item.outcome];
+            const dateStr = new Date(item.ts).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            return (
+              <View key={`${item.taskId}-${idx}`} style={gr.timelineItem}>
+                {/* 左: 日付 + ライン */}
+                <View style={gr.timelineLeft}>
+                  <Text style={gr.timelineDate}>{item.date}</Text>
+                  <View style={gr.timelineLine} />
+                </View>
+                {/* 右: カード */}
+                <View style={gr.timelineCard}>
+                  <View style={gr.cardTopRow}>
+                    <View style={[gr.catPill, { backgroundColor: col.bg }]}>
+                      <View style={[gr.catDot, { backgroundColor: col.color }]} />
+                      <Text style={[gr.catTxt, { color: col.color }]}>{item.category}</Text>
+                    </View>
+                    <View style={[gr.outcomeBadge, { backgroundColor: out.bg }]}>
+                      <Text style={[gr.outcomeTxt, { color: out.color }]}>{out.label}</Text>
+                    </View>
+                  </View>
+                  <Text style={gr.taskTitle}>{item.taskTitle}</Text>
+                  <View style={gr.stuckBox}>
+                    <Text style={gr.stuckLabel}>⚠ つまづいた内容</Text>
+                    <Text style={gr.stuckNote}>{item.stuckNote}</Text>
+                  </View>
+                  <Text style={gr.timeStamp}>{dateStr}</Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+const gr = StyleSheet.create({
+  header: { padding: 24, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.panel },
+  title: { fontSize: 22, fontWeight: '800', color: C.text, marginBottom: 4 },
+  sub: { fontSize: 13, color: C.sub, marginBottom: 16 },
+  statsRow: { flexDirection: 'row', gap: 10 },
+  statCard: { flex: 1, backgroundColor: '#F8F9FC', borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: C.border },
+  statNum: { fontSize: 22, fontWeight: '800', color: C.text },
+  statLabel: { fontSize: 11, color: C.sub, marginTop: 2 },
+  filterScroll: { backgroundColor: C.panel, borderBottomWidth: 1, borderBottomColor: C.border },
+  filterContent: { paddingHorizontal: 20, paddingVertical: 12, gap: 8, flexDirection: 'row' },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5, borderColor: C.border, backgroundColor: '#F8F9FC' },
+  filterChipActive: { backgroundColor: '#EEF2FF', borderColor: C.primary },
+  filterChipTxt: { fontSize: 12, color: C.sub },
+  filterDot: { width: 6, height: 6, borderRadius: 3 },
+  empty: { alignItems: 'center', paddingTop: 80, paddingHorizontal: 40 },
+  emptyIcon: { fontSize: 48, marginBottom: 12 },
+  emptyTxt: { fontSize: 16, color: C.sub, fontWeight: '600', marginBottom: 8 },
+  emptyHint: { fontSize: 13, color: C.muted, textAlign: 'center', lineHeight: 20 },
+  timeline: { padding: 24, gap: 4 },
+  timelineItem: { flexDirection: 'row', gap: 16, marginBottom: 16 },
+  timelineLeft: { width: 48, alignItems: 'center' },
+  timelineDate: { fontSize: 10, color: C.muted, fontWeight: '600', textAlign: 'center', lineHeight: 14 },
+  timelineLine: { flex: 1, width: 2, backgroundColor: C.border, marginTop: 4 },
+  timelineCard: { flex: 1, backgroundColor: C.panel, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: C.border, gap: 8 },
+  cardTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  catPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
+  catDot: { width: 6, height: 6, borderRadius: 3 },
+  catTxt: { fontSize: 11, fontWeight: '700' },
+  outcomeBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  outcomeTxt: { fontSize: 11, fontWeight: '700' },
+  taskTitle: { fontSize: 14, fontWeight: '700', color: C.text },
+  stuckBox: { backgroundColor: '#FFFBEB', borderRadius: 10, padding: 12, borderLeftWidth: 3, borderLeftColor: '#F59E0B', gap: 4 },
+  stuckLabel: { fontSize: 11, fontWeight: '700', color: '#D97706' },
+  stuckNote: { fontSize: 13, color: '#374151', lineHeight: 20 },
+  timeStamp: { fontSize: 11, color: C.muted },
+});
+
 function ReviewPanel() {
   const [activeFilter, setActiveFilter] = useState<ReviewFilter>('fail');
   const [failTasks, setFailTasks]     = useState<TodoTask[]>([]);
@@ -1237,6 +1548,7 @@ export default function WebLayout() {
   const [loading, setLoading] = useState(true);
   const [nav, setNav] = useState<NavKey>('today');
   const [filter, setFilter] = useState<FilterKey>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [selected, setSelected] = useState<TodoTask | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editTarget, setEditTarget] = useState<TodoTask | null>(null);
@@ -1262,6 +1574,7 @@ export default function WebLayout() {
   // フィルタリング（テンプレートは通常リストから除外）
   const filtered = tasks.filter((t) => {
     if (t.is_template) return false;
+    if (categoryFilter && t.category !== categoryFilter) return false;
     const navOk = (() => {
       if (nav === 'all') return true;
       if (nav === 'today') return t.date === todayStr;
@@ -1279,18 +1592,26 @@ export default function WebLayout() {
     return navOk && filterOk;
   });
 
+  const nonTemplate = tasks.filter((t) => !t.is_template);
+  const catCounts: Record<string, number> = {};
+  for (const cat of CATEGORIES) {
+    catCounts[`cat_${cat}`] = nonTemplate.filter((t) => t.category === cat).length;
+  }
+
   const counts = {
-    all: tasks.filter((t) => !t.is_template).length,
-    today: tasks.filter((t) => !t.is_template && t.date === todayStr).length,
-    in_progress: tasks.filter((t) => !t.is_template && t.status === 'in_progress').length,
-    done: tasks.filter((t) => !t.is_template && t.status === 'done').length,
-    important: tasks.filter((t) => !t.is_template && t.priority === 5).length,
+    all: nonTemplate.length,
+    today: nonTemplate.filter((t) => t.date === todayStr).length,
+    in_progress: nonTemplate.filter((t) => t.status === 'in_progress').length,
+    done: nonTemplate.filter((t) => t.status === 'done').length,
+    important: nonTemplate.filter((t) => t.priority === 5).length,
     templates: tasks.filter((t) => t.is_template).length,
+    ...catCounts,
   };
 
   const NAV_LABELS: Record<NavKey, string> = {
     all: 'すべてのタスク', today: '今日のタスク', in_progress: '着手中',
-    done: '完了したタスク', important: '重要なタスク', ai: 'AI診断', review: '振り返り', calendar: 'カレンダー', templates: '殿堂入り',
+    done: '完了したタスク', important: '重要なタスク', ai: 'AI診断', review: '振り返り',
+    calendar: 'カレンダー', templates: '殿堂入り', growth: '成長記録',
   };
   const FILTER_TABS: [FilterKey, string][] = [['all', 'すべて'], ['active', '未完了'], ['done', '完了']];
 
@@ -1311,6 +1632,7 @@ export default function WebLayout() {
       achieve_reason: task.achieve_reason, fail_reason: task.fail_reason,
       due_date: task.due_date, deadline_time: task.deadline_time,
       estimated_minutes: task.estimated_minutes, progress_notes: task.progress_notes,
+      category: task.category ?? 'その他', actual_minutes: task.actual_minutes ?? null,
     }).eq('id', task.id as string);
   };
 
@@ -1400,6 +1722,8 @@ export default function WebLayout() {
         onAdd={() => setShowAdd(true)}
         onLogout={() => supabase.auth.signOut()}
         userEmail={userEmail}
+        categoryFilter={categoryFilter}
+        setCategoryFilter={setCategoryFilter}
       />
 
       {/* ── メインコンテンツ ── */}
@@ -1411,11 +1735,28 @@ export default function WebLayout() {
         <View style={w.main}><CalendarPanel /></View>
       ) : nav === 'templates' ? (
         <View style={w.main}><TemplatesPanel onCopy={handleCopyFromTemplate} /></View>
+      ) : nav === 'growth' ? (
+        <View style={w.main}><GrowthPanel /></View>
       ) : (
         <View style={w.main}>
           {/* ヘッダー */}
           <View style={w.mainHeader}>
-            <Text style={w.mainTitle}>{NAV_LABELS[nav]}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Text style={w.mainTitle}>
+                {categoryFilter ? categoryFilter : NAV_LABELS[nav]}
+              </Text>
+              {categoryFilter && (() => {
+                const col = CATEGORY_COLOR[categoryFilter];
+                return (
+                  <TouchableOpacity
+                    style={[w.catFilterBadge, { backgroundColor: col?.bg }]}
+                    onPress={() => setCategoryFilter(null)}
+                  >
+                    <Text style={[w.catFilterTxt, { color: col?.color }]}>{categoryFilter} ✕</Text>
+                  </TouchableOpacity>
+                );
+              })()}
+            </View>
             <View style={w.filterRow}>
               {FILTER_TABS.map(([key, label]) => (
                 <TouchableOpacity
@@ -1513,37 +1854,39 @@ export default function WebLayout() {
 
 // サイドバー
 const sb = StyleSheet.create({
-  wrap: { width: 240, backgroundColor: C.sidebar, borderRightWidth: 1, borderRightColor: C.border, flexDirection: 'column' },
-  logo: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 20, paddingBottom: 16 },
-  logoIcon: { width: 32, height: 32, borderRadius: 8, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center' },
-  logoIconTxt: { color: '#fff', fontSize: 16, fontWeight: '800' },
-  logoTxt: { color: C.text, fontSize: 16, fontWeight: '800' },
-  addBtn: { marginHorizontal: 16, marginBottom: 16, backgroundColor: C.primary, borderRadius: 10, padding: 12, alignItems: 'center' },
-  addBtnTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  wrap: { width: 248, backgroundColor: C.sidebar, borderRightWidth: 1, borderRightColor: C.border, flexDirection: 'column' },
+  logo: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 20, paddingBottom: 14 },
+  logoIcon: { width: 34, height: 34, borderRadius: 9, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center' },
+  logoIconTxt: { color: '#fff', fontSize: 17, fontWeight: '800' },
+  logoTxt: { color: C.text, fontSize: 15, fontWeight: '800' },
+  logoSub: { color: C.muted, fontSize: 10, marginTop: 1 },
+  addBtn: { marginHorizontal: 12, marginBottom: 8, backgroundColor: C.primary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16, alignItems: 'center' },
+  addBtnTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
   navScroll: { flex: 1 },
-  section: { paddingHorizontal: 8, gap: 2 },
-  navItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8 },
+  sectionHeader: { color: C.muted, fontSize: 10, fontWeight: '800', letterSpacing: 0.8, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4 },
+  section: { paddingHorizontal: 8, gap: 1, paddingBottom: 4 },
+  navItem: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 },
   navItemActive: { backgroundColor: C.primaryBg },
-  navIcon: { fontSize: 15, width: 20, textAlign: 'center' },
-  navLabel: { flex: 1, color: C.sub, fontSize: 14, fontWeight: '500' },
+  catDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
+  navIcon: { fontSize: 13, width: 18, textAlign: 'center', color: C.muted },
+  navLabel: { flex: 1, color: C.sub, fontSize: 13, fontWeight: '500' },
   navLabelActive: { color: C.primary, fontWeight: '700' },
-  navBadge: { backgroundColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
+  navBadge: { backgroundColor: '#F2F4F7', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 2 },
   navBadgeActive: { backgroundColor: C.primaryBg },
-  navBadgeTxt: { color: C.sub, fontSize: 12, fontWeight: '600' },
+  navBadgeTxt: { color: C.muted, fontSize: 11, fontWeight: '600' },
   navBadgeTxtActive: { color: C.primary },
-  divider: { height: 1, backgroundColor: C.border, marginHorizontal: 16, marginVertical: 12 },
-  aiBox: { marginHorizontal: 12, marginBottom: 8, backgroundColor: C.primaryBg, borderRadius: 12, padding: 14 },
+  aiBox: { backgroundColor: C.primaryBg, borderRadius: 12, padding: 13 },
   aiBoxActive: { borderWidth: 1.5, borderColor: C.primary },
-  aiBoxHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-  aiBoxIcon: { color: C.primary, fontSize: 14, fontWeight: '800' },
-  aiBoxTitle: { color: C.sub, fontSize: 14, fontWeight: '700' },
-  aiBoxSub: { color: C.muted, fontSize: 12 },
-  userRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16, borderTopWidth: 1, borderTopColor: C.border },
-  userAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center' },
-  userAvatarTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  aiBoxHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 },
+  aiBoxIcon: { color: C.primary, fontSize: 13, fontWeight: '800' },
+  aiBoxTitle: { color: C.sub, fontSize: 13, fontWeight: '700' },
+  aiBoxSub: { color: C.muted, fontSize: 11, lineHeight: 16 },
+  userRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderTopWidth: 1, borderTopColor: C.borderLight },
+  userAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center' },
+  userAvatarTxt: { color: '#fff', fontWeight: '700', fontSize: 13 },
   userInfo: { flex: 1 },
-  userEmail: { color: C.sub, fontSize: 12 },
-  logoutTxt: { color: C.muted, fontSize: 12 },
+  userEmail: { color: C.sub, fontSize: 11 },
+  logoutTxt: { color: C.muted, fontSize: 11 },
 });
 
 // タスク行
@@ -1560,6 +1903,8 @@ const tr = StyleSheet.create({
   date: { fontSize: 13, fontWeight: '500', minWidth: 36, textAlign: 'right' },
   statusDot: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   statusDotTxt: { fontSize: 11, fontWeight: '600' },
+  catPill: { borderRadius: 20, paddingHorizontal: 8, paddingVertical: 2 },
+  catPillTxt: { fontSize: 10, fontWeight: '700' },
   dupBtn: { padding: 4, opacity: 0.4 },
   dupTxt: { fontSize: 15, color: C.text },
 });
@@ -1589,6 +1934,10 @@ const dp = StyleSheet.create({
   minBtnActive: { backgroundColor: '#EEF2FF', borderColor: C.primary },
   minBtnTxt: { fontSize: 11, color: C.muted },
   minBtnTxtActive: { color: C.primary, fontWeight: '700' },
+  actualBtnActive: { backgroundColor: C.successBg, borderColor: C.success },
+  actualBtnTxtActive: { color: C.success, fontWeight: '700' },
+  timeCompare: { backgroundColor: C.borderLight, borderRadius: 8, padding: 10, marginTop: 6 },
+  timeCompareTxt: { fontSize: 12, color: C.sub },
   fieldInput: { backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10, fontSize: 13, color: C.text },
   fieldInputMulti: { minHeight: 72, textAlignVertical: 'top' },
   achieveInput: { backgroundColor: '#F0FDF4', borderColor: '#86EFAC' },
@@ -1607,6 +1956,9 @@ const dp = StyleSheet.create({
   actionRight: { flexDirection: 'row', gap: 6, alignItems: 'center' },
   modalEditBtn: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
   modalEditTxt: { color: C.sub, fontSize: 12, fontWeight: '600' },
+  catBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 5, paddingHorizontal: 10, borderRadius: 20, borderWidth: 1.5, borderColor: C.border, backgroundColor: '#F9FAFB' },
+  catDot: { width: 5, height: 5, borderRadius: 3 },
+  catTxt: { fontSize: 11, color: C.muted, fontWeight: '500' },
   dupBtn: { backgroundColor: '#EEF2FF', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
   dupTxt: { color: '#4338CA', fontSize: 12, fontWeight: '600' },
   templateBtn: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
@@ -1684,8 +2036,10 @@ const diag = StyleSheet.create({
 const w = StyleSheet.create({
   root: { flex: 1, flexDirection: 'row', backgroundColor: C.bg },
   main: { flex: 1, flexDirection: 'column', borderRightWidth: 1, borderRightColor: C.border },
-  mainHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.panel },
-  mainTitle: { color: C.text, fontSize: 20, fontWeight: '800' },
+  mainHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.panel },
+  mainTitle: { color: C.text, fontSize: 18, fontWeight: '800' },
+  catFilterBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+  catFilterTxt: { fontSize: 12, fontWeight: '700' },
   filterRow: { flexDirection: 'row', gap: 2, backgroundColor: '#F3F4F6', borderRadius: 10, padding: 3 },
   filterBtn: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
   filterBtnActive: { backgroundColor: C.panel, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2 },

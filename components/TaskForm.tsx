@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Switch } from 'react-native';
-import { type TodoTask, type ProgressNote, DEFAULT_TASK, parseNotes } from '../lib/types';
+import { type TodoTask, type ProgressNote, DEFAULT_TASK, parseNotes, CATEGORIES, CATEGORY_COLOR } from '../lib/types';
 
 const PRIORITY_LABELS = ['最低', '低', '中', '高', '最高'];
 const PRIORITY_COLORS = ['#9CA3AF', '#22C55E', '#4F46E5', '#F59E0B', '#EF4444'];
@@ -86,6 +86,27 @@ export default function TaskForm({ initial, onSave, saving, onCancel }: Props) {
           numberOfLines={3}
           textAlignVertical="top"
         />
+      </View>
+
+      {/* カテゴリー */}
+      <View style={s.field}>
+        <Text style={s.label}>カテゴリー</Text>
+        <View style={[s.row, { flexWrap: 'wrap' }]}>
+          {CATEGORIES.map((cat) => {
+            const active = (task.category ?? 'その他') === cat;
+            const col = CATEGORY_COLOR[cat];
+            return (
+              <TouchableOpacity
+                key={cat}
+                style={[s.catBtn, active && { backgroundColor: col.bg, borderColor: col.color }]}
+                onPress={() => update('category', cat)}
+              >
+                {active && <View style={[s.catDot, { backgroundColor: col.color }]} />}
+                <Text style={[s.catTxt, active && { color: col.color, fontWeight: '700' }]}>{cat}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
       {/* 優先度 */}
@@ -320,6 +341,10 @@ const s = StyleSheet.create({
   segDot: { width: 6, height: 6, borderRadius: 3 },
   segTxt: { color: '#9CA3AF', fontSize: 12, fontWeight: '500' },
   segTxtActive: { color: '#4F46E5', fontWeight: '700' },
+
+  catBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 7, paddingHorizontal: 12, borderRadius: 20, borderWidth: 1.5, borderColor: '#E5E7EB', backgroundColor: '#F9FAFB', marginBottom: 6 },
+  catDot: { width: 6, height: 6, borderRadius: 3 },
+  catTxt: { color: '#9CA3AF', fontSize: 12, fontWeight: '500' },
 
   toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
 
