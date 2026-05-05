@@ -38,7 +38,7 @@ const STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> 
   failed:      { bg: '#FEE2E2', text: '#DC2626', label: '未達成' },
 };
 
-type NavKey = 'all' | 'today' | 'in_progress' | 'done' | 'important' | 'ai' | 'review' | 'calendar';
+type NavKey = 'all' | 'today' | 'in_progress' | 'done' | 'important' | 'ai' | 'review' | 'calendar' | 'templates';
 type FilterKey = 'all' | 'active' | 'done';
 type AIChatMsg = { role: 'user' | 'assistant'; content: string };
 
@@ -75,6 +75,7 @@ function Sidebar({ nav, setNav, counts, onAdd, onLogout, userEmail }: {
     { key: 'done',        icon: '✅', label: '完了したタスク',   countKey: 'done' },
     { key: 'important',   icon: '⭐', label: '重要なタスク',    countKey: 'important' },
     { key: 'calendar',    icon: '📆', label: 'カレンダー',       countKey: 'all' },
+    { key: 'templates',   icon: '🏆', label: '殿堂入り',         countKey: 'templates' },
   ];
 
   return (
@@ -155,11 +156,12 @@ function Sidebar({ nav, setNav, counts, onAdd, onLogout, userEmail }: {
 }
 
 // ── タスク行 ──────────────────────────────────────────────────────
-function TaskRow({ task, selected, onSelect, onToggleDone }: {
+function TaskRow({ task, selected, onSelect, onToggleDone, onDuplicate }: {
   task: TodoTask;
   selected: boolean;
   onSelect: () => void;
   onToggleDone: () => void;
+  onDuplicate: () => void;
 }) {
   const isDone = task.status === 'done';
   const ps = PRIORITY_STYLE[task.priority] ?? PRIORITY_STYLE[3];
@@ -199,6 +201,15 @@ function TaskRow({ task, selected, onSelect, onToggleDone }: {
           </Text>
         </View>
       )}
+
+      {/* 複製ボタン */}
+      <TouchableOpacity
+        style={tr.dupBtn}
+        onPress={(e) => { e.stopPropagation?.(); onDuplicate(); }}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
+        <Text style={tr.dupTxt}>⧉</Text>
+      </TouchableOpacity>
     </TouchableOpacity>
   );
 }
@@ -274,12 +285,14 @@ function AIMiniChat({ task }: { task: TodoTask }) {
 // ── 詳細パネル（インライン編集対応） ─────────────────────────────
 const PRIORITY_LABELS_DP = ['最低', '低', '中', '高', '最高'];
 
-function DetailPanel({ task, onClose, onSave, onOpenModal, onDelete }: {
+function DetailPanel({ task, onClose, onSave, onOpenModal, onDelete, onDuplicate, onAddTemplate }: {
   task: TodoTask;
   onClose: () => void;
   onSave: (t: TodoTask) => Promise<void>;
   onOpenModal: () => void;
   onDelete: () => void;
+  onDuplicate: () => void;
+  onAddTemplate: () => void;
 }) {
   const [local, setLocal] = useState<TodoTask>(task);
   const [saving, setSaving] = useState(false);
@@ -485,6 +498,18 @@ function DetailPanel({ task, onClose, onSave, onOpenModal, onDelete }: {
         )}
 
         <View style={dp.actionRight}>
+          {/* 複製 */}
+          <TouchableOpacity style={dp.dupBtn} onPress={onDuplicate}>
+            <Text style={dp.dupTxt}>⧉ 複製</Text>
+          </TouchableOpacity>
+
+          {/* 殿堂入り */}
+          <TouchableOpacity style={[dp.templateBtn, task.is_template && dp.templateBtnActive]} onPress={onAddTemplate}>
+            <Text style={[dp.templateTxt, task.is_template && dp.templateTxtActive]}>
+              {task.is_template ? '🏆 殿堂入り済み' : '🏆 殿堂入り'}
+            </Text>
+          </TouchableOpacity>
+
           {/* モーダルで詳細編集 */}
           <TouchableOpacity style={dp.modalEditBtn} onPress={onOpenModal}>
             <Text style={dp.modalEditTxt}>⛶ 全画面編集</Text>
@@ -753,6 +778,114 @@ const cal = StyleSheet.create({
   taskSubGreen: { fontSize: 12, color: '#16A34A', marginTop: 3 },
   badge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   badgeTxt: { fontSize: 11, fontWeight: '700' },
+});
+
+// ──────────────────────────────────────────────────────────
+// TemplatesPanel（殿堂入り一覧）
+// ──────────────────────────────────────────────────────────
+function TemplatesPanel({ onCopy }: { onCopy: (task: TodoTask) => Promise<void> }) {
+  const [templates, setTemplates] = useState<TodoTask[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [copying, setCopying] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('todo_tasks').select('*').eq('is_template', true).order('priority', { ascending: false });
+    setTemplates((data ?? []) as TodoTask[]);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleCopy = async (t: TodoTask) => {
+    setCopying(t.id!);
+    await onCopy(t);
+    setCopying(null);
+  };
+
+  const handleRemove = async (t: TodoTask) => {
+    setRemoving(t.id!);
+    await supabase.from('todo_tasks').update({ is_template: false }).eq('id', t.id!);
+    setTemplates((prev) => prev.filter((x) => x.id !== t.id));
+    setRemoving(null);
+  };
+
+  if (loading) return <ActivityIndicator color={C.primary} style={{ marginTop: 40 }} />;
+
+  return (
+    <ScrollView style={tpl.wrap} contentContainerStyle={tpl.content} showsVerticalScrollIndicator={false}>
+      <View style={tpl.headerRow}>
+        <Text style={tpl.heading}>🏆 殿堂入りタスク</Text>
+        <Text style={tpl.sub}>よく使うタスクのテンプレート。「今日にコピー」で即追加。</Text>
+      </View>
+
+      {templates.length === 0 ? (
+        <View style={tpl.empty}>
+          <Text style={tpl.emptyIcon}>🏆</Text>
+          <Text style={tpl.emptyTxt}>まだ殿堂入りタスクがありません</Text>
+          <Text style={tpl.emptyHint}>タスク詳細パネルの「🏆 殿堂入り」ボタンで登録できます</Text>
+        </View>
+      ) : (
+        templates.map((t) => {
+          const ps = PRIORITY_STYLE[t.priority] ?? PRIORITY_STYLE[3];
+          return (
+            <View key={t.id} style={tpl.card}>
+              <View style={tpl.cardTop}>
+                <View style={[tpl.priorityBadge, { backgroundColor: ps.bg }]}>
+                  <Text style={[tpl.priorityTxt, { color: ps.text }]}>{PRIORITY_LABEL[t.priority]}</Text>
+                </View>
+                <Text style={tpl.title}>{t.title}</Text>
+              </View>
+              {t.leverage ? <Text style={tpl.leverage} numberOfLines={2}>{t.leverage}</Text> : null}
+              {t.description ? <Text style={tpl.desc} numberOfLines={2}>{t.description}</Text> : null}
+              <View style={tpl.cardActions}>
+                <TouchableOpacity
+                  style={[tpl.copyBtn, copying === t.id && tpl.copyBtnDisabled]}
+                  onPress={() => handleCopy(t)}
+                  disabled={copying === t.id}
+                >
+                  <Text style={tpl.copyTxt}>{copying === t.id ? 'コピー中...' : '⧉ 今日にコピー'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={tpl.removeBtn}
+                  onPress={() => handleRemove(t)}
+                  disabled={removing === t.id}
+                >
+                  <Text style={tpl.removeTxt}>{removing === t.id ? '...' : '殿堂入りを外す'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          );
+        })
+      )}
+    </ScrollView>
+  );
+}
+
+const tpl = StyleSheet.create({
+  wrap: { flex: 1, backgroundColor: C.bg },
+  content: { padding: 24, paddingBottom: 48, maxWidth: 700 },
+  headerRow: { marginBottom: 24 },
+  heading: { fontSize: 20, fontWeight: '800', color: C.text, marginBottom: 6 },
+  sub: { fontSize: 13, color: C.sub },
+  empty: { alignItems: 'center', paddingVertical: 60 },
+  emptyIcon: { fontSize: 48, marginBottom: 12 },
+  emptyTxt: { fontSize: 16, color: C.sub, fontWeight: '600', marginBottom: 8 },
+  emptyHint: { fontSize: 13, color: C.muted, textAlign: 'center' },
+  card: { backgroundColor: '#fff', borderRadius: 16, padding: 18, marginBottom: 14, borderWidth: 1, borderColor: C.border },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  priorityBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  priorityTxt: { fontSize: 11, fontWeight: '700' },
+  title: { flex: 1, fontSize: 16, fontWeight: '700', color: C.text },
+  leverage: { fontSize: 13, color: C.primary, marginBottom: 4, lineHeight: 18 },
+  desc: { fontSize: 13, color: C.sub, lineHeight: 18, marginBottom: 8 },
+  cardActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  copyBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.primary, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 },
+  copyBtnDisabled: { opacity: 0.5 },
+  copyTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  removeBtn: { borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1, borderColor: C.border },
+  removeTxt: { color: C.sub, fontSize: 12, fontWeight: '600' },
 });
 
 function ReviewPanel() {
@@ -1126,8 +1259,9 @@ export default function WebLayout() {
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
-  // フィルタリング
+  // フィルタリング（テンプレートは通常リストから除外）
   const filtered = tasks.filter((t) => {
+    if (t.is_template) return false;
     const navOk = (() => {
       if (nav === 'all') return true;
       if (nav === 'today') return t.date === todayStr;
@@ -1146,16 +1280,17 @@ export default function WebLayout() {
   });
 
   const counts = {
-    all: tasks.length,
-    today: tasks.filter((t) => t.date === todayStr).length,
-    in_progress: tasks.filter((t) => t.status === 'in_progress').length,
-    done: tasks.filter((t) => t.status === 'done').length,
-    important: tasks.filter((t) => t.priority === 5).length,
+    all: tasks.filter((t) => !t.is_template).length,
+    today: tasks.filter((t) => !t.is_template && t.date === todayStr).length,
+    in_progress: tasks.filter((t) => !t.is_template && t.status === 'in_progress').length,
+    done: tasks.filter((t) => !t.is_template && t.status === 'done').length,
+    important: tasks.filter((t) => !t.is_template && t.priority === 5).length,
+    templates: tasks.filter((t) => t.is_template).length,
   };
 
   const NAV_LABELS: Record<NavKey, string> = {
     all: 'すべてのタスク', today: '今日のタスク', in_progress: '着手中',
-    done: '完了したタスク', important: '重要なタスク', ai: 'AI診断', review: '振り返り', calendar: 'カレンダー',
+    done: '完了したタスク', important: '重要なタスク', ai: 'AI診断', review: '振り返り', calendar: 'カレンダー', templates: '殿堂入り',
   };
   const FILTER_TABS: [FilterKey, string][] = [['all', 'すべて'], ['active', '未完了'], ['done', '完了']];
 
@@ -1214,6 +1349,45 @@ export default function WebLayout() {
     loadTasks();
   };
 
+  const handleDuplicate = async (task: TodoTask) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const copy = {
+      user_id: user.id,
+      title: task.title, description: task.description, leverage: task.leverage,
+      priority: task.priority, date: todayStr, status: 'pending' as const,
+      achieve_reason: '', fail_reason: '', due_date: null,
+      deadline_time: task.deadline_time, estimated_minutes: task.estimated_minutes,
+      progress_notes: '[]', is_template: false,
+    };
+    const { data } = await supabase.from('todo_tasks').insert(copy).select().single();
+    loadTasks();
+    if (data) setSelected(data as TodoTask);
+  };
+
+  const handleAddTemplate = async (task: TodoTask) => {
+    const next = !task.is_template;
+    await supabase.from('todo_tasks').update({ is_template: next }).eq('id', task.id as string);
+    setSelected({ ...task, is_template: next });
+    loadTasks();
+  };
+
+  const handleCopyFromTemplate = async (task: TodoTask) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const copy = {
+      user_id: user.id,
+      title: task.title, description: task.description, leverage: task.leverage,
+      priority: task.priority, date: todayStr, status: 'pending' as const,
+      achieve_reason: '', fail_reason: '', due_date: null,
+      deadline_time: task.deadline_time, estimated_minutes: task.estimated_minutes,
+      progress_notes: '[]', is_template: false,
+    };
+    const { data } = await supabase.from('todo_tasks').insert(copy).select().single();
+    loadTasks();
+    if (data) { setSelected(data as TodoTask); setNav('today'); }
+  };
+
   if (loading) return <ActivityIndicator style={{ flex: 1, backgroundColor: C.bg }} color={C.primary} />;
 
   return (
@@ -1235,6 +1409,8 @@ export default function WebLayout() {
         <View style={w.main}><ReviewPanel /></View>
       ) : nav === 'calendar' ? (
         <View style={w.main}><CalendarPanel /></View>
+      ) : nav === 'templates' ? (
+        <View style={w.main}><TemplatesPanel onCopy={handleCopyFromTemplate} /></View>
       ) : (
         <View style={w.main}>
           {/* ヘッダー */}
@@ -1268,6 +1444,7 @@ export default function WebLayout() {
                     selected={selected?.id === t.id}
                     onSelect={() => setSelected(t)}
                     onToggleDone={() => handleToggleDone(t)}
+                    onDuplicate={() => handleDuplicate(t)}
                   />
                   {i < filtered.length - 1 && <View style={w.divider} />}
                 </View>
@@ -1286,6 +1463,8 @@ export default function WebLayout() {
             onSave={handleInlineSave}
             onOpenModal={() => setEditTarget(selected)}
             onDelete={() => handleDelete(selected)}
+            onDuplicate={() => handleDuplicate(selected)}
+            onAddTemplate={() => handleAddTemplate(selected)}
           />
         ) : (
           <View style={w.panelEmpty}>
@@ -1381,6 +1560,8 @@ const tr = StyleSheet.create({
   date: { fontSize: 13, fontWeight: '500', minWidth: 36, textAlign: 'right' },
   statusDot: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   statusDotTxt: { fontSize: 11, fontWeight: '600' },
+  dupBtn: { padding: 4, opacity: 0.4 },
+  dupTxt: { fontSize: 15, color: C.text },
 });
 
 // 詳細パネル
@@ -1426,6 +1607,12 @@ const dp = StyleSheet.create({
   actionRight: { flexDirection: 'row', gap: 6, alignItems: 'center' },
   modalEditBtn: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
   modalEditTxt: { color: C.sub, fontSize: 12, fontWeight: '600' },
+  dupBtn: { backgroundColor: '#EEF2FF', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
+  dupTxt: { color: '#4338CA', fontSize: 12, fontWeight: '600' },
+  templateBtn: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
+  templateBtnActive: { backgroundColor: '#FEF9C3' },
+  templateTxt: { color: C.sub, fontSize: 12, fontWeight: '600' },
+  templateTxtActive: { color: '#92400E', fontWeight: '700' },
   delBtn: { backgroundColor: '#FEE2E2', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
   delTxt: { color: '#DC2626', fontSize: 12, fontWeight: '600' },
   delConfirm: { backgroundColor: '#FEE2E2', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9 },

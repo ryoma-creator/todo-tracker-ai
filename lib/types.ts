@@ -22,6 +22,7 @@ export type TodoTask = {
   deadline_time: string | null;
   estimated_minutes: number | null;
   progress_notes: string; // JSON: ProgressNote[]
+  is_template?: boolean;
 };
 
 const localDateStr = (d = new Date()) =>
