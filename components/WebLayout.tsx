@@ -38,7 +38,7 @@ const STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> 
   failed:      { bg: '#FEE2E2', text: '#DC2626', label: '未達成' },
 };
 
-type NavKey = 'all' | 'today' | 'in_progress' | 'done' | 'important' | 'ai' | 'review';
+type NavKey = 'all' | 'today' | 'in_progress' | 'done' | 'important' | 'ai' | 'review' | 'calendar';
 type FilterKey = 'all' | 'active' | 'done';
 type AIChatMsg = { role: 'user' | 'assistant'; content: string };
 
@@ -74,6 +74,7 @@ function Sidebar({ nav, setNav, counts, onAdd, onLogout, userEmail }: {
     { key: 'in_progress', icon: '🔄', label: '着手中',          countKey: 'in_progress' },
     { key: 'done',        icon: '✅', label: '完了したタスク',   countKey: 'done' },
     { key: 'important',   icon: '⭐', label: '重要なタスク',    countKey: 'important' },
+    { key: 'calendar',    icon: '📆', label: 'カレンダー',       countKey: 'all' },
   ];
 
   return (
@@ -513,6 +514,247 @@ function DetailPanel({ task, onClose, onSave, onOpenModal, onDelete }: {
 // ── 振り返りパネル ────────────────────────────────────────────────
 type ReviewFilter = 'fail' | 'stuck' | 'achieve';
 
+// ──────────────────────────────────────────────────────────
+// CalendarPanel
+// ──────────────────────────────────────────────────────────
+const WEEK_DAYS_CAL = ['日', '月', '火', '水', '木', '金', '土'];
+
+type DaySummary = { total: number; done: number; failed: number };
+
+function getDayColors(s: DaySummary): { bg: string; text: string } {
+  if (s.total === 0) return { bg: 'transparent', text: '#9CA3AF' };
+  const rate = s.done / s.total;
+  if (rate >= 0.8) return { bg: '#DCFCE7', text: '#15803D' };
+  if (rate >= 0.5) return { bg: '#FEF9C3', text: '#A16207' };
+  if (s.failed > 0)  return { bg: '#FEE2E2', text: '#B91C1C' };
+  return { bg: '#EEF2FF', text: '#4338CA' };
+}
+
+function getDayEmoji(s: DaySummary): string {
+  if (s.total === 0) return '';
+  const rate = s.done / s.total;
+  if (rate >= 0.8) return '✅';
+  if (rate >= 0.5) return '🙂';
+  if (s.failed > 0) return '😓';
+  return '⏳';
+}
+
+const STATUS_LABEL_CAL: Record<string, { label: string; color: string }> = {
+  done:        { label: '達成',   color: '#16A34A' },
+  failed:      { label: '未達成', color: '#DC2626' },
+  in_progress: { label: '着手中', color: '#D97706' },
+  pending:     { label: '未着手', color: '#6B7280' },
+};
+
+function CalendarPanel() {
+  const now = new Date();
+  const [year, setYear]   = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth());
+  const [dayMap, setDayMap]     = useState<Record<string, DaySummary>>({});
+  const [loading, setLoading]   = useState(true);
+  const [selDate, setSelDate]   = useState<string | null>(null);
+  const [dayTasks, setDayTasks] = useState<TodoTask[]>([]);
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  const loadMonth = useCallback(async (y: number, m: number) => {
+    setLoading(true);
+    const from = `${y}-${pad(m + 1)}-01`;
+    const lastDay = new Date(y, m + 1, 0).getDate();
+    const to = `${y}-${pad(m + 1)}-${pad(lastDay)}`;
+    const { data } = await supabase.from('todo_tasks').select('date,status').gte('date', from).lte('date', to);
+    const map: Record<string, DaySummary> = {};
+    if (data) {
+      (data as { date: string; status: string }[]).forEach((t) => {
+        if (!map[t.date]) map[t.date] = { total: 0, done: 0, failed: 0 };
+        map[t.date].total++;
+        if (t.status === 'done')   map[t.date].done++;
+        if (t.status === 'failed') map[t.date].failed++;
+      });
+    }
+    setDayMap(map);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadMonth(year, month); }, [year, month, loadMonth]);
+
+  const loadDay = async (date: string) => {
+    setSelDate(date);
+    const { data } = await supabase.from('todo_tasks').select('*').eq('date', date).order('priority', { ascending: false });
+    setDayTasks((data ?? []) as TodoTask[]);
+  };
+
+  const prevMonth = () => {
+    if (month === 0) { setYear(y => y - 1); setMonth(11); } else setMonth(m => m - 1);
+    setSelDate(null);
+  };
+  const nextMonth = () => {
+    if (month === 11) { setYear(y => y + 1); setMonth(0); } else setMonth(m => m + 1);
+    setSelDate(null);
+  };
+
+  const firstDay  = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells: (number | null)[] = [
+    ...Array(firstDay).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+  return (
+    <ScrollView style={cal.wrap} contentContainerStyle={cal.content} showsVerticalScrollIndicator={false}>
+      {/* ヘッダー */}
+      <View style={cal.header}>
+        <TouchableOpacity onPress={prevMonth} style={cal.arrow}>
+          <Text style={cal.arrowTxt}>‹</Text>
+        </TouchableOpacity>
+        <View style={cal.titleBlock}>
+          <Text style={cal.monthTitle}>{year}年 {month + 1}月</Text>
+          <Text style={cal.subTitle}>{Object.keys(dayMap).length}日記録済み</Text>
+        </View>
+        <TouchableOpacity onPress={nextMonth} style={cal.arrow}>
+          <Text style={cal.arrowTxt}>›</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* 曜日 */}
+      <View style={cal.weekRow}>
+        {WEEK_DAYS_CAL.map((d, i) => (
+          <Text key={d} style={[cal.weekDay, i === 0 && cal.sun, i === 6 && cal.sat]}>{d}</Text>
+        ))}
+      </View>
+
+      {/* グリッド */}
+      {loading ? (
+        <ActivityIndicator color="#4F46E5" style={{ marginTop: 40 }} />
+      ) : (
+        <View style={cal.grid}>
+          {cells.map((day, idx) => {
+            if (!day) return <View key={`e-${idx}`} style={cal.cell} />;
+            const dateStr = `${year}-${pad(month + 1)}-${pad(day)}`;
+            const summary = dayMap[dateStr];
+            const isToday = dateStr === todayStr;
+            const isSel   = selDate === dateStr;
+            const col = summary ? getDayColors(summary) : { bg: 'transparent', text: '#9CA3AF' };
+            const emoji = summary ? getDayEmoji(summary) : '';
+            const isSun = idx % 7 === 0;
+            const isSat = idx % 7 === 6;
+            return (
+              <TouchableOpacity
+                key={dateStr}
+                style={[
+                  cal.cell,
+                  summary && { backgroundColor: col.bg },
+                  isToday && cal.todayBorder,
+                  isSel && cal.selBorder,
+                ]}
+                onPress={() => loadDay(dateStr)}
+                activeOpacity={0.7}
+              >
+                <Text style={[
+                  cal.dayNum,
+                  { color: summary ? col.text : (isSun ? '#EF4444' : isSat ? '#4F46E5' : '#9CA3AF') },
+                  isToday && cal.todayNum,
+                ]}>
+                  {day}
+                </Text>
+                {emoji ? <Text style={cal.emoji}>{emoji}</Text> : null}
+                {summary && summary.total > 0 ? (
+                  <Text style={[cal.countTxt, { color: col.text }]}>{summary.done}/{summary.total}</Text>
+                ) : null}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+
+      {/* 凡例 */}
+      <View style={cal.legend}>
+        {[
+          { bg: '#DCFCE7', label: '達成率80%+' },
+          { bg: '#FEF9C3', label: '達成率50%+' },
+          { bg: '#FEE2E2', label: '未達成あり' },
+          { bg: '#EEF2FF', label: '進行中' },
+        ].map(({ bg, label }) => (
+          <View key={label} style={cal.legendItem}>
+            <View style={[cal.legendDot, { backgroundColor: bg }]} />
+            <Text style={cal.legendTxt}>{label}</Text>
+          </View>
+        ))}
+      </View>
+
+      {/* 選択日タスク */}
+      {selDate && (
+        <View style={cal.dayPanel}>
+          <Text style={cal.dayPanelTitle}>{selDate} のタスク{dayTasks.length > 0 ? ` (${dayTasks.length}件)` : ''}</Text>
+          {dayTasks.length === 0 ? (
+            <Text style={cal.noTask}>タスクなし</Text>
+          ) : (
+            dayTasks.map((t) => {
+              const st = STATUS_LABEL_CAL[t.status] ?? { label: t.status, color: '#6B7280' };
+              return (
+                <View key={t.id} style={cal.taskRow}>
+                  <View style={[cal.statusDot, { backgroundColor: st.color }]} />
+                  <View style={cal.taskInfo}>
+                    <Text style={[cal.taskTitle, t.status === 'done' && cal.doneTitle]}>{t.title}</Text>
+                    {t.fail_reason ? <Text style={cal.taskSubRed}>未達成理由: {t.fail_reason}</Text>
+                      : t.achieve_reason ? <Text style={cal.taskSubGreen}>達成理由: {t.achieve_reason}</Text>
+                      : null}
+                  </View>
+                  <View style={[cal.badge, { backgroundColor: st.color + '18' }]}>
+                    <Text style={[cal.badgeTxt, { color: st.color }]}>{st.label}</Text>
+                  </View>
+                </View>
+              );
+            })
+          )}
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+const cal = StyleSheet.create({
+  wrap: { flex: 1, backgroundColor: '#F8FAFC' },
+  content: { padding: 24, paddingBottom: 48, maxWidth: 700 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  arrow: { padding: 8 },
+  arrowTxt: { color: '#4F46E5', fontSize: 32, fontWeight: 'bold' },
+  titleBlock: { alignItems: 'center' },
+  monthTitle: { color: '#111827', fontSize: 20, fontWeight: '800' },
+  subTitle: { color: '#9CA3AF', fontSize: 12, marginTop: 2 },
+  weekRow: { flexDirection: 'row', marginBottom: 4 },
+  weekDay: { flex: 1, textAlign: 'center', color: '#9CA3AF', fontSize: 12, fontWeight: '600', paddingVertical: 6 },
+  sun: { color: '#EF4444' },
+  sat: { color: '#4F46E5' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16 },
+  cell: { width: '14.285%', aspectRatio: 0.9, borderRadius: 10, padding: 3, marginVertical: 2, alignItems: 'center', justifyContent: 'center' },
+  todayBorder: { borderWidth: 2, borderColor: '#4F46E5' },
+  selBorder: { borderWidth: 2, borderColor: '#F59E0B' },
+  dayNum: { fontSize: 13, fontWeight: '600' },
+  todayNum: { color: '#4F46E5', fontWeight: '800' },
+  emoji: { fontSize: 15, marginTop: 1 },
+  countTxt: { fontSize: 10, fontWeight: '700', marginTop: 1 },
+  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 24 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendDot: { width: 12, height: 12, borderRadius: 3 },
+  legendTxt: { fontSize: 11, color: '#6B7280' },
+  dayPanel: { backgroundColor: '#fff', borderRadius: 16, padding: 20, borderWidth: 1, borderColor: '#E5E7EB' },
+  dayPanelTitle: { fontSize: 15, fontWeight: '700', color: '#111827', marginBottom: 14 },
+  noTask: { color: '#9CA3AF', fontSize: 13, textAlign: 'center', paddingVertical: 12 },
+  taskRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  statusDot: { width: 8, height: 8, borderRadius: 4, marginTop: 5 },
+  taskInfo: { flex: 1 },
+  taskTitle: { fontSize: 14, color: '#111827', fontWeight: '500' },
+  doneTitle: { color: '#9CA3AF', textDecorationLine: 'line-through' },
+  taskSubRed: { fontSize: 12, color: '#EF4444', marginTop: 3 },
+  taskSubGreen: { fontSize: 12, color: '#16A34A', marginTop: 3 },
+  badge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  badgeTxt: { fontSize: 11, fontWeight: '700' },
+});
+
 function ReviewPanel() {
   const [activeFilter, setActiveFilter] = useState<ReviewFilter>('fail');
   const [failTasks, setFailTasks]     = useState<TodoTask[]>([]);
@@ -913,7 +1155,7 @@ export default function WebLayout() {
 
   const NAV_LABELS: Record<NavKey, string> = {
     all: 'すべてのタスク', today: '今日のタスク', in_progress: '着手中',
-    done: '完了したタスク', important: '重要なタスク', ai: 'AI診断', review: '振り返り',
+    done: '完了したタスク', important: '重要なタスク', ai: 'AI診断', review: '振り返り', calendar: 'カレンダー',
   };
   const FILTER_TABS: [FilterKey, string][] = [['all', 'すべて'], ['active', '未完了'], ['done', '完了']];
 
@@ -991,6 +1233,8 @@ export default function WebLayout() {
         <View style={w.main}><AIDiagPanel /></View>
       ) : nav === 'review' ? (
         <View style={w.main}><ReviewPanel /></View>
+      ) : nav === 'calendar' ? (
+        <View style={w.main}><CalendarPanel /></View>
       ) : (
         <View style={w.main}>
           {/* ヘッダー */}

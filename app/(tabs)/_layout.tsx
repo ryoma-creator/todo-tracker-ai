@@ -21,6 +21,7 @@ export default function TabLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ title: '今日' }} />
+      <Tabs.Screen name="calendar" options={{ title: 'カレンダー' }} />
       <Tabs.Screen name="history" options={{ title: '履歴' }} />
       <Tabs.Screen name="ai" options={{ title: 'AI診断' }} />
     </Tabs>
