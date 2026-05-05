@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet,
   TextInput, ActivityIndicator, Modal,
@@ -1002,200 +1002,490 @@ const tpl = StyleSheet.create({
 // ──────────────────────────────────────────────────────────
 // GrowthPanel（成長記録）
 // ──────────────────────────────────────────────────────────
-type GrowthItem = {
-  taskId: string;
-  taskTitle: string;
-  category: string;
-  date: string;
-  stuckNote: string;
-  ts: string;
-  outcome: 'done' | 'failed' | 'in_progress' | 'pending';
+// ──────────────────────────────────────────────────────────────────────────
+// GrowthPanel — 3タブ: 概要 / タスク別履歴 / AI成長コーチ
+// ──────────────────────────────────────────────────────────────────────────
+type TaskRecord = {
+  id: string; title: string; category: string; date: string;
+  status: string; achieve_reason: string; fail_reason: string;
+  progress_notes: string;
+};
+type TaskGroup = {
+  title: string; category: string;
+  attempts: { date: string; status: string; stuckNotes: string[]; achieve_reason: string; fail_reason: string }[];
+};
+type GrowthTab = 'overview' | 'history' | 'ai';
+
+const OUTCOME_STYLE: Record<string, { label: string; color: string; bg: string }> = {
+  done:        { label: '達成 ✓', color: '#059669', bg: '#ECFDF5' },
+  failed:      { label: '未達成',  color: '#DC2626', bg: '#FEF2F2' },
+  in_progress: { label: '継続中',  color: '#D97706', bg: '#FFFBEB' },
+  pending:     { label: '未着手',  color: '#6B7280', bg: '#F1F5F9' },
 };
 
 function GrowthPanel() {
-  const [items, setItems]           = useState<GrowthItem[]>([]);
-  const [loading, setLoading]       = useState(true);
-  const [catFilter, setCatFilter]   = useState<string | null>(null);
+  const [allTasks, setAllTasks] = useState<TaskRecord[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [tab, setTab]           = useState<GrowthTab>('overview');
+  const [catFilter, setCatFilter] = useState<string | null>(null);
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiCat, setAiCat] = useState<string | null>(null);
 
-  useEffect(() => {
-    const load = async () => {
-      const { data } = await supabase
-        .from('todo_tasks')
-        .select('id,title,category,date,status,progress_notes')
-        .order('date', { ascending: false });
-      const result: GrowthItem[] = [];
-      if (data) {
-        for (const t of data) {
-          try {
-            const notes = JSON.parse(t.progress_notes ?? '[]');
-            for (const n of notes) {
-              if (n.type === 'stuck') {
-                result.push({
-                  taskId: t.id,
-                  taskTitle: t.title,
-                  category: t.category ?? 'その他',
-                  date: t.date,
-                  stuckNote: n.body,
-                  ts: n.ts,
-                  outcome: t.status,
-                });
-              }
-            }
-          } catch { /* skip */ }
-        }
-      }
-      result.sort((a, b) => b.ts.localeCompare(a.ts));
-      setItems(result);
-      setLoading(false);
-    };
-    load();
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('todo_tasks')
+      .select('id,title,category,date,status,achieve_reason,fail_reason,progress_notes')
+      .eq('is_template', false)
+      .order('date', { ascending: true });
+    setAllTasks((data ?? []) as TaskRecord[]);
+    setLoading(false);
   }, []);
 
-  const displayed = catFilter ? items.filter((i) => i.category === catFilter) : items;
+  useEffect(() => { load(); }, [load]);
 
-  const overcame = displayed.filter((i) => i.outcome === 'done').length;
-  const total    = displayed.length;
+  // タスクをタイトルでグルーピング（2回以上出現するもの）
+  const groups = useMemo((): TaskGroup[] => {
+    const map: Record<string, TaskGroup> = {};
+    const filtered = catFilter ? allTasks.filter((t) => t.category === catFilter) : allTasks;
+    for (const t of filtered) {
+      const key = t.title.trim();
+      if (!map[key]) map[key] = { title: key, category: t.category ?? 'その他', attempts: [] };
+      let stuckNotes: string[] = [];
+      try { stuckNotes = JSON.parse(t.progress_notes ?? '[]').filter((n: { type: string }) => n.type === 'stuck').map((n: { body: string }) => n.body); } catch { /* empty */ }
+      map[key].attempts.push({ date: t.date, status: t.status, stuckNotes, achieve_reason: t.achieve_reason, fail_reason: t.fail_reason });
+    }
+    return Object.values(map).filter((g) => g.attempts.length >= 2).sort((a, b) => b.attempts.length - a.attempts.length);
+  }, [allTasks, catFilter]);
 
-  const OUTCOME_STYLE: Record<string, { label: string; color: string; bg: string }> = {
-    done:        { label: '克服 ✓', color: '#059669', bg: '#ECFDF5' },
-    failed:      { label: '未達成',  color: '#DC2626', bg: '#FEF2F2' },
-    in_progress: { label: '継続中',  color: '#D97706', bg: '#FFFBEB' },
-    pending:     { label: '未着手',  color: '#6B7280', bg: '#F1F5F9' },
+  // カテゴリー別統計
+  const catStats = useMemo(() => {
+    return CATEGORIES.map((cat) => {
+      const tasks = allTasks.filter((t) => t.category === cat);
+      const done = tasks.filter((t) => t.status === 'done').length;
+      const failed = tasks.filter((t) => t.status === 'failed').length;
+      const stuckCount = tasks.reduce((acc, t) => {
+        try { return acc + JSON.parse(t.progress_notes ?? '[]').filter((n: { type: string }) => n.type === 'stuck').length; }
+        catch { return acc; }
+      }, 0);
+      return { cat, total: tasks.length, done, failed, stuckCount, rate: tasks.length > 0 ? Math.round(done / tasks.length * 100) : 0 };
+    }).filter((s) => s.total > 0);
+  }, [allTasks]);
+
+  // 全体統計
+  const totalTasks = allTasks.length;
+  const totalDone  = allTasks.filter((t) => t.status === 'done').length;
+  const totalStuck = allTasks.reduce((acc, t) => {
+    try { return acc + JSON.parse(t.progress_notes ?? '[]').filter((n: { type: string }) => n.type === 'stuck').length; }
+    catch { return acc; }
+  }, 0);
+
+  // AI成長分析
+  const runAiAnalysis = async () => {
+    setAiLoading(true); setAiResult('');
+    const targetTasks = aiCat ? allTasks.filter((t) => t.category === aiCat) : allTasks;
+    const groupedByCat: Record<string, { done: number; failed: number; stuck: string[] }> = {};
+    for (const t of targetTasks) {
+      const cat = t.category ?? 'その他';
+      if (!groupedByCat[cat]) groupedByCat[cat] = { done: 0, failed: 0, stuck: [] };
+      if (t.status === 'done') groupedByCat[cat].done++;
+      if (t.status === 'failed') groupedByCat[cat].failed++;
+      try {
+        const notes = JSON.parse(t.progress_notes ?? '[]').filter((n: { type: string }) => n.type === 'stuck').map((n: { body: string }) => n.body);
+        groupedByCat[cat].stuck.push(...notes);
+      } catch { /* empty */ }
+    }
+    // 繰り返しタスクのグループも生成
+    const repeatGroups = groups.filter((g) => !aiCat || g.category === aiCat).slice(0, 8);
+    const repeatSection = repeatGroups.map((g) => {
+      const history = g.attempts.map((a) => {
+        const stuck = a.stuckNotes.length > 0 ? ` つまづき:「${a.stuckNotes[0]}」` : '';
+        const reason = a.status === 'done' ? ` 達成理由:「${a.achieve_reason}」` : a.status === 'failed' ? ` 失敗理由:「${a.fail_reason}」` : '';
+        return `  ・${a.date} [${OUTCOME_STYLE[a.status]?.label ?? a.status}]${stuck}${reason}`;
+      }).join('\n');
+      return `「${g.title}」(${g.category}) — ${g.attempts.length}回:\n${history}`;
+    }).join('\n\n');
+    const catSection = Object.entries(groupedByCat).map(([cat, s]) => {
+      const stuckList = [...new Set(s.stuck)].slice(0, 5).map((x) => `「${x}」`).join('、');
+      return `${cat}: 達成${s.done}件、未達成${s.failed}件${stuckList ? `、主なつまづき: ${stuckList}` : ''}`;
+    }).join('\n');
+    const prompt = `あなたは成長コーチです。以下のタスク管理データから、ユーザーの成長・弱点・パターンを分析してください。
+
+【カテゴリー別サマリー】
+${catSection}
+
+【繰り返し取り組んだタスクの変化】
+${repeatSection || '繰り返しタスクなし'}
+
+以下の形式で日本語で答えてください（各200文字以内）:
+## 📈 成長の軌跡
+（どう成長してきたか、改善が見えるパターン）
+
+## ⚠️ つまづきやすいパターン
+（繰り返し引っかかっている点・弱点）
+
+## 💪 強みと弱み
+（得意なこと・苦手なこと）
+
+## 🎯 今後の推奨アクション
+（具体的な3つのアクション）`;
+
+    try {
+      const res = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+      });
+      setAiResult(res.choices[0].message.content ?? '');
+    } catch (e) {
+      setAiResult('エラーが発生しました。APIキーを確認してください。');
+    }
+    setAiLoading(false);
   };
+
+  const TABS: { key: GrowthTab; label: string; icon: string }[] = [
+    { key: 'overview', label: '概要',        icon: '▦' },
+    { key: 'history',  label: 'タスク別履歴', icon: '◷' },
+    { key: 'ai',       label: 'AI成長コーチ', icon: '✦' },
+  ];
 
   if (loading) return <ActivityIndicator color={C.primary} style={{ marginTop: 60 }} />;
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: C.bg }} contentContainerStyle={{ paddingBottom: 48 }} showsVerticalScrollIndicator={false}>
-      {/* ヘッダー */}
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
+      {/* ── ヘッダー ── */}
       <View style={gr.header}>
-        <Text style={gr.title}>成長記録</Text>
-        <Text style={gr.sub}>つまづきから何を学び、どう乗り越えたか</Text>
-        {total > 0 && (
-          <View style={gr.statsRow}>
-            <View style={gr.statCard}>
-              <Text style={gr.statNum}>{total}</Text>
-              <Text style={gr.statLabel}>総つまづき数</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <View>
+            <Text style={gr.title}>成長記録</Text>
+            <Text style={gr.sub}>タスクデータから成長・弱点・パターンを分析</Text>
+          </View>
+          <View style={gr.topStats}>
+            <View style={gr.topStat}><Text style={gr.topStatNum}>{totalTasks}</Text><Text style={gr.topStatLabel}>総タスク</Text></View>
+            <View style={[gr.topStat, { borderLeftWidth: 1, borderLeftColor: C.border }]}>
+              <Text style={[gr.topStatNum, { color: C.success }]}>{totalTasks > 0 ? Math.round(totalDone / totalTasks * 100) : 0}%</Text>
+              <Text style={gr.topStatLabel}>達成率</Text>
             </View>
-            <View style={[gr.statCard, { backgroundColor: C.successBg }]}>
-              <Text style={[gr.statNum, { color: C.success }]}>{overcame}</Text>
-              <Text style={gr.statLabel}>克服済み</Text>
-            </View>
-            <View style={[gr.statCard, { backgroundColor: '#EEF2FF' }]}>
-              <Text style={[gr.statNum, { color: C.primary }]}>{total > 0 ? Math.round(overcame / total * 100) : 0}%</Text>
-              <Text style={gr.statLabel}>克服率</Text>
+            <View style={[gr.topStat, { borderLeftWidth: 1, borderLeftColor: C.border }]}>
+              <Text style={[gr.topStatNum, { color: C.warn }]}>{totalStuck}</Text>
+              <Text style={gr.topStatLabel}>つまづき</Text>
             </View>
           </View>
-        )}
+        </View>
+        {/* タブ */}
+        <View style={gr.tabBar}>
+          {TABS.map((t) => (
+            <TouchableOpacity key={t.key} style={[gr.tabBtn, tab === t.key && gr.tabBtnActive]} onPress={() => setTab(t.key)}>
+              <Text style={gr.tabIcon}>{t.icon}</Text>
+              <Text style={[gr.tabLabel, tab === t.key && gr.tabLabelActive]}>{t.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
-      {/* カテゴリーフィルター */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={gr.filterScroll} contentContainerStyle={gr.filterContent}>
-        <TouchableOpacity
-          style={[gr.filterChip, !catFilter && gr.filterChipActive]}
-          onPress={() => setCatFilter(null)}
-        >
-          <Text style={[gr.filterChipTxt, !catFilter && { color: C.primary, fontWeight: '700' }]}>すべて ({items.length})</Text>
-        </TouchableOpacity>
-        {CATEGORIES.map((cat) => {
-          const count = items.filter((i) => i.category === cat).length;
-          if (count === 0) return null;
-          const col = CATEGORY_COLOR[cat];
-          const active = catFilter === cat;
-          return (
-            <TouchableOpacity
-              key={cat}
-              style={[gr.filterChip, active && { backgroundColor: col.bg, borderColor: col.color }]}
-              onPress={() => setCatFilter(active ? null : cat)}
-            >
-              <View style={[gr.filterDot, { backgroundColor: col.color }]} />
-              <Text style={[gr.filterChipTxt, active && { color: col.color, fontWeight: '700' }]}>{cat} ({count})</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      {/* タイムライン */}
-      {displayed.length === 0 ? (
-        <View style={gr.empty}>
-          <Text style={gr.emptyIcon}>📈</Text>
-          <Text style={gr.emptyTxt}>つまづき記録がまだありません</Text>
-          <Text style={gr.emptyHint}>タスク着手中に「⚠ つまづき」メモを追加すると記録されます</Text>
-        </View>
-      ) : (
-        <View style={gr.timeline}>
-          {displayed.map((item, idx) => {
-            const col = CATEGORY_COLOR[item.category] ?? { color: '#64748B', bg: '#F1F5F9' };
-            const out = OUTCOME_STYLE[item.outcome];
-            const dateStr = new Date(item.ts).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      {/* カテゴリーフィルター（概要・履歴タブのみ） */}
+      {tab !== 'ai' && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={gr.filterBar} contentContainerStyle={gr.filterBarContent}>
+          <TouchableOpacity style={[gr.chip, !catFilter && gr.chipActive]} onPress={() => setCatFilter(null)}>
+            <Text style={[gr.chipTxt, !catFilter && { color: C.primary, fontWeight: '700' }]}>すべて</Text>
+          </TouchableOpacity>
+          {CATEGORIES.map((cat) => {
+            const count = allTasks.filter((t) => t.category === cat).length;
+            if (count === 0) return null;
+            const col = CATEGORY_COLOR[cat];
+            const active = catFilter === cat;
             return (
-              <View key={`${item.taskId}-${idx}`} style={gr.timelineItem}>
-                {/* 左: 日付 + ライン */}
-                <View style={gr.timelineLeft}>
-                  <Text style={gr.timelineDate}>{item.date}</Text>
-                  <View style={gr.timelineLine} />
+              <TouchableOpacity key={cat} style={[gr.chip, active && { backgroundColor: col.bg, borderColor: col.color }]} onPress={() => setCatFilter(active ? null : cat)}>
+                <View style={[gr.chipDot, { backgroundColor: col.color }]} />
+                <Text style={[gr.chipTxt, active && { color: col.color, fontWeight: '700' }]}>{cat} ({count})</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      )}
+
+      {/* ── 概要タブ ── */}
+      {tab === 'overview' && (
+        <ScrollView contentContainerStyle={gr.content} showsVerticalScrollIndicator={false}>
+          <Text style={gr.sectionTitle}>カテゴリー別パフォーマンス</Text>
+          {catStats.filter((s) => !catFilter || s.cat === catFilter).map((s) => {
+            const col = CATEGORY_COLOR[s.cat];
+            return (
+              <View key={s.cat} style={gr.catCard}>
+                <View style={gr.catCardTop}>
+                  <View style={[gr.catPill, { backgroundColor: col.bg }]}>
+                    <View style={[gr.catDot, { backgroundColor: col.color }]} />
+                    <Text style={[gr.catTxt, { color: col.color }]}>{s.cat}</Text>
+                  </View>
+                  <Text style={gr.catCardCount}>{s.total}タスク</Text>
                 </View>
-                {/* 右: カード */}
-                <View style={gr.timelineCard}>
-                  <View style={gr.cardTopRow}>
-                    <View style={[gr.catPill, { backgroundColor: col.bg }]}>
-                      <View style={[gr.catDot, { backgroundColor: col.color }]} />
-                      <Text style={[gr.catTxt, { color: col.color }]}>{item.category}</Text>
-                    </View>
-                    <View style={[gr.outcomeBadge, { backgroundColor: out.bg }]}>
-                      <Text style={[gr.outcomeTxt, { color: out.color }]}>{out.label}</Text>
-                    </View>
-                  </View>
-                  <Text style={gr.taskTitle}>{item.taskTitle}</Text>
-                  <View style={gr.stuckBox}>
-                    <Text style={gr.stuckLabel}>⚠ つまづいた内容</Text>
-                    <Text style={gr.stuckNote}>{item.stuckNote}</Text>
-                  </View>
-                  <Text style={gr.timeStamp}>{dateStr}</Text>
+                {/* 達成率バー */}
+                <View style={gr.barTrack}>
+                  <View style={[gr.barFill, { width: `${s.rate}%` as `${number}%`, backgroundColor: s.rate >= 70 ? C.success : s.rate >= 40 ? C.warn : C.danger }]} />
+                </View>
+                <View style={gr.catCardStats}>
+                  <Text style={gr.catStatItem}><Text style={{ color: C.success, fontWeight: '700' }}>達成 {s.done}</Text></Text>
+                  <Text style={gr.catStatItem}><Text style={{ color: C.danger, fontWeight: '700' }}>未達成 {s.failed}</Text></Text>
+                  <Text style={gr.catStatItem}><Text style={{ color: C.warn, fontWeight: '700' }}>つまづき {s.stuckCount}</Text></Text>
+                  <Text style={[gr.catStatItem, { color: C.primary, fontWeight: '700' }]}>達成率 {s.rate}%</Text>
                 </View>
               </View>
             );
           })}
-        </View>
+          {groups.filter((g) => !catFilter || g.category === catFilter).length > 0 && (
+            <>
+              <Text style={[gr.sectionTitle, { marginTop: 24 }]}>繰り返し取り組んでいるタスク Top</Text>
+              {groups.filter((g) => !catFilter || g.category === catFilter).slice(0, 5).map((g) => {
+                const col = CATEGORY_COLOR[g.category] ?? { color: '#64748B', bg: '#F1F5F9' };
+                const lastAttempt = g.attempts[g.attempts.length - 1];
+                const out = OUTCOME_STYLE[lastAttempt.status];
+                return (
+                  <View key={g.title} style={gr.repeatCard}>
+                    <View style={gr.repeatTop}>
+                      <View style={[gr.catPill, { backgroundColor: col.bg }]}>
+                        <View style={[gr.catDot, { backgroundColor: col.color }]} />
+                        <Text style={[gr.catTxt, { color: col.color }]}>{g.category}</Text>
+                      </View>
+                      <Text style={gr.repeatCount}>{g.attempts.length}回挑戦</Text>
+                    </View>
+                    <Text style={gr.repeatTitle}>{g.title}</Text>
+                    <View style={gr.repeatDots}>
+                      {g.attempts.map((a, i) => {
+                        const c = a.status === 'done' ? C.success : a.status === 'failed' ? C.danger : a.status === 'in_progress' ? C.warn : C.muted;
+                        return <View key={i} style={[gr.dot, { backgroundColor: c }]} />;
+                      })}
+                      <View style={[gr.outcomeBadge, { backgroundColor: out.bg, marginLeft: 8 }]}>
+                        <Text style={[gr.outcomeTxt, { color: out.color }]}>{out.label}</Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
+            </>
+          )}
+        </ScrollView>
       )}
-    </ScrollView>
+
+      {/* ── タスク別履歴タブ ── */}
+      {tab === 'history' && (
+        <ScrollView contentContainerStyle={gr.content} showsVerticalScrollIndicator={false}>
+          {groups.filter((g) => !catFilter || g.category === catFilter).length === 0 ? (
+            <View style={gr.empty}>
+              <Text style={gr.emptyIcon}>◷</Text>
+              <Text style={gr.emptyTxt}>繰り返しタスクがまだありません</Text>
+              <Text style={gr.emptyHint}>同じタイトルのタスクを2回以上記録すると履歴が表示されます</Text>
+            </View>
+          ) : (
+            groups.filter((g) => !catFilter || g.category === catFilter).map((g) => {
+              const col = CATEGORY_COLOR[g.category] ?? { color: '#64748B', bg: '#F1F5F9' };
+              const isExpanded = expandedGroup === g.title;
+              const doneCount = g.attempts.filter((a) => a.status === 'done').length;
+              return (
+                <View key={g.title} style={gr.histCard}>
+                  <TouchableOpacity style={gr.histHeader} onPress={() => setExpandedGroup(isExpanded ? null : g.title)} activeOpacity={0.7}>
+                    <View style={{ flex: 1, gap: 6 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <View style={[gr.catPill, { backgroundColor: col.bg }]}>
+                          <View style={[gr.catDot, { backgroundColor: col.color }]} />
+                          <Text style={[gr.catTxt, { color: col.color }]}>{g.category}</Text>
+                        </View>
+                        <Text style={gr.histCount}>{g.attempts.length}回 / 達成{doneCount}回</Text>
+                      </View>
+                      <Text style={gr.histTitle}>{g.title}</Text>
+                      {/* ミニドット */}
+                      <View style={{ flexDirection: 'row', gap: 4, flexWrap: 'wrap' }}>
+                        {g.attempts.map((a, i) => {
+                          const c = a.status === 'done' ? C.success : a.status === 'failed' ? C.danger : a.status === 'in_progress' ? C.warn : C.muted;
+                          return (
+                            <View key={i} style={[gr.dot, { backgroundColor: c }]}>
+                              <Text style={{ fontSize: 7, color: '#fff', fontWeight: '800' }}>{i + 1}</Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                    <Text style={{ color: C.muted, fontSize: 18 }}>{isExpanded ? '▲' : '▼'}</Text>
+                  </TouchableOpacity>
+
+                  {isExpanded && (
+                    <View style={gr.histTimeline}>
+                      {g.attempts.map((a, i) => {
+                        const out = OUTCOME_STYLE[a.status];
+                        const isLast = i === g.attempts.length - 1;
+                        return (
+                          <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
+                            <View style={{ alignItems: 'center', width: 24 }}>
+                              <View style={[gr.timelineDot, { backgroundColor: out.color }]}>
+                                <Text style={{ color: '#fff', fontSize: 9, fontWeight: '800' }}>{i + 1}</Text>
+                              </View>
+                              {!isLast && <View style={gr.timelineConnector} />}
+                            </View>
+                            <View style={[gr.attemptCard, { marginBottom: isLast ? 0 : 12 }]}>
+                              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                <Text style={gr.attemptDate}>{a.date}</Text>
+                                <View style={[gr.outcomeBadge, { backgroundColor: out.bg }]}>
+                                  <Text style={[gr.outcomeTxt, { color: out.color }]}>{out.label}</Text>
+                                </View>
+                              </View>
+                              {a.stuckNotes.map((note, ni) => (
+                                <View key={ni} style={gr.stuckBox}>
+                                  <Text style={gr.stuckLabel}>⚠ つまづき</Text>
+                                  <Text style={gr.stuckNote}>{note}</Text>
+                                </View>
+                              ))}
+                              {a.status === 'done' && a.achieve_reason ? (
+                                <View style={gr.achieveBox}>
+                                  <Text style={gr.achieveLabel}>✓ 達成できた理由</Text>
+                                  <Text style={gr.achieveNote}>{a.achieve_reason}</Text>
+                                </View>
+                              ) : null}
+                              {a.status === 'failed' && a.fail_reason ? (
+                                <View style={gr.failBox}>
+                                  <Text style={gr.failLabel}>✗ 達成できなかった理由</Text>
+                                  <Text style={gr.failNote}>{a.fail_reason}</Text>
+                                </View>
+                              ) : null}
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              );
+            })
+          )}
+        </ScrollView>
+      )}
+
+      {/* ── AI成長コーチタブ ── */}
+      {tab === 'ai' && (
+        <ScrollView contentContainerStyle={gr.content} showsVerticalScrollIndicator={false}>
+          <View style={gr.aiSetup}>
+            <Text style={gr.aiSetupTitle}>✦ AI成長コーチ</Text>
+            <Text style={gr.aiSetupSub}>蓄積したタスクデータをAIが分析し、あなたの成長の軌跡・弱点・推奨アクションを教えます</Text>
+            <Text style={gr.aiSetupLabel}>分析対象のカテゴリー</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, flexDirection: 'row', paddingBottom: 4 }}>
+              <TouchableOpacity style={[gr.chip, !aiCat && gr.chipActive]} onPress={() => setAiCat(null)}>
+                <Text style={[gr.chipTxt, !aiCat && { color: C.primary, fontWeight: '700' }]}>全カテゴリー</Text>
+              </TouchableOpacity>
+              {CATEGORIES.map((cat) => {
+                const col = CATEGORY_COLOR[cat];
+                const active = aiCat === cat;
+                const count = allTasks.filter((t) => t.category === cat).length;
+                if (count === 0) return null;
+                return (
+                  <TouchableOpacity key={cat} style={[gr.chip, active && { backgroundColor: col.bg, borderColor: col.color }]} onPress={() => setAiCat(active ? null : cat)}>
+                    <View style={[gr.chipDot, { backgroundColor: col.color }]} />
+                    <Text style={[gr.chipTxt, active && { color: col.color, fontWeight: '700' }]}>{cat}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <TouchableOpacity style={[gr.aiBtn, aiLoading && { opacity: 0.6 }]} onPress={runAiAnalysis} disabled={aiLoading || totalTasks === 0}>
+              {aiLoading
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={gr.aiBtnTxt}>✦ {aiResult ? '再分析する' : '成長を分析する'}</Text>}
+            </TouchableOpacity>
+            {totalTasks === 0 && <Text style={{ color: C.muted, fontSize: 12, textAlign: 'center' }}>タスクがまだありません</Text>}
+          </View>
+
+          {aiResult !== '' && (
+            <View style={gr.aiResult}>
+              {aiResult.split('\n').map((line, i) => {
+                const isHeading = line.startsWith('##');
+                return (
+                  <Text key={i} style={isHeading ? gr.aiHeading : gr.aiBody}>
+                    {isHeading ? line.replace('## ', '') : line}
+                  </Text>
+                );
+              })}
+            </View>
+          )}
+        </ScrollView>
+      )}
+    </View>
   );
 }
 
 const gr = StyleSheet.create({
-  header: { padding: 24, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.panel },
-  title: { fontSize: 22, fontWeight: '800', color: C.text, marginBottom: 4 },
-  sub: { fontSize: 13, color: C.sub, marginBottom: 16 },
-  statsRow: { flexDirection: 'row', gap: 10 },
-  statCard: { flex: 1, backgroundColor: '#F8F9FC', borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: C.border },
-  statNum: { fontSize: 22, fontWeight: '800', color: C.text },
-  statLabel: { fontSize: 11, color: C.sub, marginTop: 2 },
-  filterScroll: { backgroundColor: C.panel, borderBottomWidth: 1, borderBottomColor: C.border },
-  filterContent: { paddingHorizontal: 20, paddingVertical: 12, gap: 8, flexDirection: 'row' },
-  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5, borderColor: C.border, backgroundColor: '#F8F9FC' },
-  filterChipActive: { backgroundColor: '#EEF2FF', borderColor: C.primary },
-  filterChipTxt: { fontSize: 12, color: C.sub },
-  filterDot: { width: 6, height: 6, borderRadius: 3 },
-  empty: { alignItems: 'center', paddingTop: 80, paddingHorizontal: 40 },
-  emptyIcon: { fontSize: 48, marginBottom: 12 },
-  emptyTxt: { fontSize: 16, color: C.sub, fontWeight: '600', marginBottom: 8 },
-  emptyHint: { fontSize: 13, color: C.muted, textAlign: 'center', lineHeight: 20 },
-  timeline: { padding: 24, gap: 4 },
-  timelineItem: { flexDirection: 'row', gap: 16, marginBottom: 16 },
-  timelineLeft: { width: 48, alignItems: 'center' },
-  timelineDate: { fontSize: 10, color: C.muted, fontWeight: '600', textAlign: 'center', lineHeight: 14 },
-  timelineLine: { flex: 1, width: 2, backgroundColor: C.border, marginTop: 4 },
-  timelineCard: { flex: 1, backgroundColor: C.panel, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: C.border, gap: 8 },
-  cardTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  catPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
-  catDot: { width: 6, height: 6, borderRadius: 3 },
-  catTxt: { fontSize: 11, fontWeight: '700' },
-  outcomeBadge: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-  outcomeTxt: { fontSize: 11, fontWeight: '700' },
-  taskTitle: { fontSize: 14, fontWeight: '700', color: C.text },
-  stuckBox: { backgroundColor: '#FFFBEB', borderRadius: 10, padding: 12, borderLeftWidth: 3, borderLeftColor: '#F59E0B', gap: 4 },
-  stuckLabel: { fontSize: 11, fontWeight: '700', color: '#D97706' },
-  stuckNote: { fontSize: 13, color: '#374151', lineHeight: 20 },
+  header: { padding: 20, paddingBottom: 0, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.panel },
+  title: { fontSize: 20, fontWeight: '800', color: C.text, marginBottom: 2 },
+  sub: { fontSize: 12, color: C.sub, marginBottom: 12 },
+  topStats: { flexDirection: 'row', backgroundColor: '#F8F9FC', borderRadius: 12, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
+  topStat: { paddingHorizontal: 14, paddingVertical: 10, alignItems: 'center' },
+  topStatNum: { fontSize: 18, fontWeight: '800', color: C.text },
+  topStatLabel: { fontSize: 10, color: C.muted, marginTop: 1 },
+  tabBar: { flexDirection: 'row', marginTop: 12 },
+  tabBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 11, borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tabBtnActive: { borderBottomColor: C.primary },
+  tabIcon: { fontSize: 13, color: C.muted },
+  tabLabel: { fontSize: 13, color: C.muted, fontWeight: '600' },
+  tabLabelActive: { color: C.primary, fontWeight: '700' },
+  filterBar: { backgroundColor: C.panel, borderBottomWidth: 1, borderBottomColor: C.border, maxHeight: 48 },
+  filterBarContent: { paddingHorizontal: 16, paddingVertical: 8, gap: 6, flexDirection: 'row', alignItems: 'center' },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20, borderWidth: 1.5, borderColor: C.border, backgroundColor: '#F8F9FC' },
+  chipActive: { backgroundColor: '#EEF2FF', borderColor: C.primary },
+  chipTxt: { fontSize: 11, color: C.sub },
+  chipDot: { width: 6, height: 6, borderRadius: 3 },
+  content: { padding: 20, paddingBottom: 48, gap: 10 },
+  sectionTitle: { fontSize: 12, fontWeight: '800', color: C.muted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 },
+  // カテゴリーカード
+  catCard: { backgroundColor: C.panel, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: C.border, gap: 10 },
+  catCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  catCardCount: { fontSize: 12, color: C.muted },
+  catCardStats: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  catStatItem: { fontSize: 12, color: C.sub },
+  barTrack: { height: 6, backgroundColor: C.borderLight, borderRadius: 3, overflow: 'hidden' },
+  barFill: { height: 6, borderRadius: 3 },
+  // 繰り返しカード
+  repeatCard: { backgroundColor: C.panel, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: C.border, gap: 8 },
+  repeatTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  repeatCount: { fontSize: 11, color: C.muted },
+  repeatTitle: { fontSize: 14, fontWeight: '700', color: C.text },
+  repeatDots: { flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
+  dot: { width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  // カテゴリーピル（共通）
+  catPill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
+  catDot: { width: 5, height: 5, borderRadius: 3 },
+  catTxt: { fontSize: 10, fontWeight: '700' },
+  outcomeBadge: { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  outcomeTxt: { fontSize: 10, fontWeight: '700' },
+  // タスク別履歴
+  histCard: { backgroundColor: C.panel, borderRadius: 14, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
+  histHeader: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 8 },
+  histCount: { fontSize: 11, color: C.muted },
+  histTitle: { fontSize: 14, fontWeight: '700', color: C.text },
+  histTimeline: { paddingHorizontal: 14, paddingBottom: 14, paddingTop: 4, borderTopWidth: 1, borderTopColor: C.borderLight },
+  timelineDot: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  timelineConnector: { flex: 1, width: 2, backgroundColor: C.border, marginTop: 2 },
+  attemptCard: { flex: 1, backgroundColor: '#FAFBFC', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: C.borderLight, gap: 6 },
+  attemptDate: { fontSize: 12, color: C.muted, fontWeight: '600' },
+  stuckBox: { backgroundColor: '#FFFBEB', borderRadius: 8, padding: 10, borderLeftWidth: 2, borderLeftColor: C.warn, gap: 2 },
+  stuckLabel: { fontSize: 10, fontWeight: '700', color: C.warn },
+  stuckNote: { fontSize: 12, color: '#374151', lineHeight: 18 },
+  achieveBox: { backgroundColor: '#ECFDF5', borderRadius: 8, padding: 10, borderLeftWidth: 2, borderLeftColor: C.success, gap: 2 },
+  achieveLabel: { fontSize: 10, fontWeight: '700', color: C.success },
+  achieveNote: { fontSize: 12, color: '#166534', lineHeight: 18 },
+  failBox: { backgroundColor: '#FEF2F2', borderRadius: 8, padding: 10, borderLeftWidth: 2, borderLeftColor: C.danger, gap: 2 },
+  failLabel: { fontSize: 10, fontWeight: '700', color: C.danger },
+  failNote: { fontSize: 12, color: '#991B1B', lineHeight: 18 },
+  // 空の状態
+  empty: { alignItems: 'center', paddingVertical: 60 },
+  emptyIcon: { fontSize: 40, marginBottom: 10 },
+  emptyTxt: { fontSize: 15, color: C.sub, fontWeight: '600', marginBottom: 6 },
+  emptyHint: { fontSize: 12, color: C.muted, textAlign: 'center', lineHeight: 18 },
+  // AIタブ
+  aiSetup: { backgroundColor: C.panel, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: C.border, gap: 12 },
+  aiSetupTitle: { fontSize: 16, fontWeight: '800', color: C.text },
+  aiSetupSub: { fontSize: 13, color: C.sub, lineHeight: 20 },
+  aiSetupLabel: { fontSize: 11, fontWeight: '700', color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  aiBtn: { backgroundColor: C.primary, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
+  aiBtnTxt: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  aiResult: { backgroundColor: C.panel, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: C.border, gap: 4 },
+  aiHeading: { fontSize: 14, fontWeight: '800', color: C.text, marginTop: 12, marginBottom: 4 },
+  aiBody: { fontSize: 13, color: C.sub, lineHeight: 22 },
   timeStamp: { fontSize: 11, color: C.muted },
 });
 
