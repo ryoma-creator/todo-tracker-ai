@@ -14,6 +14,7 @@ export type TodoTask = {
   title: string;
   description: string;
   leverage: string;
+  risk: string;
   priority: number;
   status: TaskStatus;
   achieve_reason: string;
@@ -48,6 +49,7 @@ export const DEFAULT_TASK = (): TodoTask => ({
   title: '',
   description: '',
   leverage: '',
+  risk: '',
   priority: 3,
   status: 'pending',
   achieve_reason: '',

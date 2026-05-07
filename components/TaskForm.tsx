@@ -2,6 +2,73 @@ import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Switch } from 'react-native';
 import { type TodoTask, type ProgressNote, DEFAULT_TASK, parseNotes, CATEGORIES, CATEGORY_COLOR } from '../lib/types';
 
+// ── 時刻ピッカー（15分刻み）──────────────────────────
+function TimePicker({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const hour   = value ? parseInt(value.split(':')[0], 10) : 9;
+  const minute = value ? parseInt(value.split(':')[1], 10) : 0;
+
+  const setTime = (h: number, m: number) => {
+    onChange(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+  };
+
+  return (
+    <View>
+      <TouchableOpacity
+        style={[tp.display, open && tp.displayOpen]}
+        onPress={() => { if (!open) setOpen(true); }}
+        activeOpacity={0.7}
+      >
+        <Text style={value ? tp.displayTxt : tp.placeholder}>
+          {value ? `⏰  ${value}` : '未設定（タップして設定）'}
+        </Text>
+        {value && (
+          <TouchableOpacity
+            onPress={() => { onChange(null); setOpen(false); }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Text style={tp.clearTxt}>✕</Text>
+          </TouchableOpacity>
+        )}
+      </TouchableOpacity>
+
+      {open && (
+        <View style={tp.panel}>
+          {/* 時 */}
+          <View style={tp.pickerRow}>
+            <Text style={tp.unitLabel}>時</Text>
+            <TouchableOpacity style={tp.arrow} onPress={() => setTime(Math.max(0, hour - 1), minute)}>
+              <Text style={tp.arrowTxt}>▲</Text>
+            </TouchableOpacity>
+            <Text style={tp.bigNum}>{String(hour).padStart(2, '0')}</Text>
+            <TouchableOpacity style={tp.arrow} onPress={() => setTime(Math.min(23, hour + 1), minute)}>
+              <Text style={tp.arrowTxt}>▼</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* 分 */}
+          <View style={tp.pickerRow}>
+            <Text style={tp.unitLabel}>分</Text>
+            <View style={tp.minBtns}>
+              {[0, 15, 30, 45].map((m) => (
+                <TouchableOpacity
+                  key={m}
+                  style={[tp.minBtn, minute === m && tp.minBtnActive]}
+                  onPress={() => { setTime(hour, m); setOpen(false); }}
+                >
+                  <Text style={[tp.minBtnTxt, minute === m && tp.minBtnTxtActive]}>
+                    {String(m).padStart(2, '0')}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
 const PRIORITY_LABELS = ['最低', '低', '中', '高', '最高'];
 const PRIORITY_COLORS = ['#9CA3AF', '#22C55E', '#4F46E5', '#F59E0B', '#EF4444'];
 
@@ -75,12 +142,27 @@ export default function TaskForm({ initial, onSave, saving, onCancel }: Props) {
 
       {/* 得られる価値 */}
       <View style={s.field}>
-        <Text style={s.label}>やることでどんな価値がある？</Text>
+        <Text style={s.label}>✅ やることでどんな価値がある？</Text>
         <TextInput
           style={[s.input, s.textarea]}
           value={task.leverage}
           onChangeText={(v) => update('leverage', v)}
           placeholder="例：amazonの試験に受かる可能性が上がる。スキルが上がれば長期的に時給が上がる。"
+          placeholderTextColor="#9CA3AF"
+          multiline
+          numberOfLines={3}
+          textAlignVertical="top"
+        />
+      </View>
+
+      {/* やらないリスク */}
+      <View style={s.field}>
+        <Text style={s.label}>⚠️ やらないとどんなリスクがある？</Text>
+        <TextInput
+          style={[s.input, s.textarea, s.riskInput]}
+          value={task.risk}
+          onChangeText={(v) => update('risk', v)}
+          placeholder="例：締め切りを逃して信頼を失う。技術的負債が積み重なり後で3倍の工数がかかる。"
           placeholderTextColor="#9CA3AF"
           multiline
           numberOfLines={3}
@@ -133,13 +215,9 @@ export default function TaskForm({ initial, onSave, saving, onCancel }: Props) {
       {/* 締め切り時刻 */}
       <View style={s.field}>
         <Text style={s.label}>締め切り時刻（任意）</Text>
-        <TextInput
-          style={s.input}
-          value={task.deadline_time ?? ''}
-          onChangeText={(v) => update('deadline_time', v || null)}
-          placeholder="例: 18:00"
-          placeholderTextColor="#9CA3AF"
-          keyboardType="numbers-and-punctuation"
+        <TimePicker
+          value={task.deadline_time}
+          onChange={(v) => update('deadline_time', v)}
         />
       </View>
 
@@ -333,6 +411,7 @@ const s = StyleSheet.create({
     borderColor: '#E5E7EB',
   },
   textarea: { minHeight: 88, textAlignVertical: 'top' },
+  riskInput: { borderColor: '#FCD34D', backgroundColor: '#FFFBEB' },
 
   row: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
 
@@ -378,4 +457,24 @@ const s = StyleSheet.create({
   saveBtn: { flex: 2, backgroundColor: '#4F46E5', borderRadius: 12, padding: 16, alignItems: 'center' },
   saveBtnDisabled: { backgroundColor: '#C7D2FE' },
   saveTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },
+});
+
+// ── TimePicker スタイル ──────────────────────────────
+const tp = StyleSheet.create({
+  display: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#F9FAFB', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E5E7EB' },
+  displayOpen: { borderColor: '#6366F1', borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
+  displayTxt: { color: '#111827', fontSize: 15 },
+  placeholder: { color: '#9CA3AF', fontSize: 15 },
+  clearTxt: { color: '#9CA3AF', fontSize: 14, paddingLeft: 8 },
+  panel: { backgroundColor: '#F9FAFB', borderWidth: 1, borderTopWidth: 0, borderColor: '#6366F1', borderBottomLeftRadius: 10, borderBottomRightRadius: 10, padding: 14, gap: 14 },
+  pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  unitLabel: { color: '#6B7280', fontSize: 13, fontWeight: '600', width: 20 },
+  arrow: { backgroundColor: '#EEF2FF', borderRadius: 8, width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  arrowTxt: { color: '#4F46E5', fontSize: 14, fontWeight: '700' },
+  bigNum: { color: '#111827', fontSize: 28, fontWeight: '800', width: 52, textAlign: 'center' },
+  minBtns: { flexDirection: 'row', gap: 8, flex: 1 },
+  minBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: '#E5E7EB', backgroundColor: '#fff', alignItems: 'center' },
+  minBtnActive: { backgroundColor: '#EEF2FF', borderColor: '#6366F1' },
+  minBtnTxt: { color: '#9CA3AF', fontSize: 14, fontWeight: '600' },
+  minBtnTxtActive: { color: '#4F46E5', fontWeight: '800' },
 });

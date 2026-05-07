@@ -142,9 +142,19 @@ function DetailSheet({ task, onClose, onEdit, onDelete, onStatusChange }: {
         {/* 得られる価値 */}
         {task.leverage ? (
           <View style={d.section}>
-            <Text style={d.sectionLabel}>得られる価値</Text>
+            <Text style={d.sectionLabel}>✅ 得られる価値</Text>
             <View style={d.leverageBox}>
               <Text style={d.leverageTxt}>{task.leverage}</Text>
+            </View>
+          </View>
+        ) : null}
+
+        {/* やらないリスク */}
+        {task.risk ? (
+          <View style={d.section}>
+            <Text style={d.sectionLabel}>⚠️ やらないリスク</Text>
+            <View style={d.riskBox}>
+              <Text style={d.riskTxt}>{task.risk}</Text>
             </View>
           </View>
         ) : null}
@@ -250,6 +260,7 @@ export default function TodayScreen() {
     setSaving(true);
     await supabase.from('todo_tasks').update({
       title: task.title, description: task.description, leverage: task.leverage,
+      risk: task.risk,
       priority: task.priority, status: task.status,
       achieve_reason: task.achieve_reason, fail_reason: task.fail_reason,
       due_date: task.due_date, deadline_time: task.deadline_time,
@@ -469,6 +480,8 @@ const d = StyleSheet.create({
   metaValPlain: { color: '#374151', fontSize: 13, fontWeight: '600' },
   leverageBox: { backgroundColor: '#F8F9FF', borderRadius: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#6366f1' },
   leverageTxt: { color: '#374151', fontSize: 14, lineHeight: 22 },
+  riskBox: { backgroundColor: '#FFFBEB', borderRadius: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#F59E0B' },
+  riskTxt: { color: '#374151', fontSize: 14, lineHeight: 22 },
   descTxt: { color: '#64748B', fontSize: 14, lineHeight: 22 },
   noteChip: { flexDirection: 'row', gap: 8, borderRadius: 8, padding: 10, borderLeftWidth: 2 },
   noteChipDoing: { backgroundColor: '#EDE9FE', borderLeftColor: '#6366f1' },
