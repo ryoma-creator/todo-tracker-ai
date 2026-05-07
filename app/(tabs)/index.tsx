@@ -249,26 +249,55 @@ export default function TodayScreen() {
   const handleAdd = async (task: TodoTask) => {
     setSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setSaving(false); return; }
-    await supabase.from('todo_tasks').insert({ ...task, user_id: user.id });
+    if (!user) { setErrorMsg('ログインが必要です'); setSaving(false); return; }
+    const { error } = await supabase.from('todo_tasks').insert({
+      date: task.date,
+      title: task.title,
+      description: task.description,
+      leverage: task.leverage,
+      risk: task.risk ?? '',
+      priority: task.priority,
+      status: task.status,
+      achieve_reason: task.achieve_reason,
+      fail_reason: task.fail_reason,
+      due_date: task.due_date,
+      deadline_time: task.deadline_time,
+      estimated_minutes: task.estimated_minutes,
+      progress_notes: task.progress_notes,
+      category: task.category ?? 'その他',
+      user_id: user.id,
+    });
+    if (error) {
+      setErrorMsg(`保存失敗: ${error.message}`);
+      setSaving(false);
+      return;
+    }
     setShowAdd(false);
-    loadTasks();
+    await loadTasks();
     setSaving(false);
   };
 
   const handleEdit = async (task: TodoTask) => {
     setSaving(true);
-    await supabase.from('todo_tasks').update({
-      title: task.title, description: task.description, leverage: task.leverage,
-      risk: task.risk,
-      priority: task.priority, status: task.status,
-      achieve_reason: task.achieve_reason, fail_reason: task.fail_reason,
-      due_date: task.due_date, deadline_time: task.deadline_time,
-      estimated_minutes: task.estimated_minutes, progress_notes: task.progress_notes,
+    const { error } = await supabase.from('todo_tasks').update({
+      title: task.title,
+      description: task.description,
+      leverage: task.leverage,
+      risk: task.risk ?? '',
+      priority: task.priority,
+      status: task.status,
+      achieve_reason: task.achieve_reason,
+      fail_reason: task.fail_reason,
+      due_date: task.due_date,
+      deadline_time: task.deadline_time,
+      estimated_minutes: task.estimated_minutes,
+      progress_notes: task.progress_notes,
+      category: task.category ?? 'その他',
     }).eq('id', task.id as string);
+    if (error) { setErrorMsg(`更新失敗: ${error.message}`); setSaving(false); return; }
     setEditTarget(null);
     setDetailTask(null);
-    loadTasks();
+    await loadTasks();
     setSaving(false);
   };
 
