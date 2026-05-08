@@ -1862,6 +1862,11 @@ export default function WebLayout() {
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
+  // モーダルを開くたびに saving をリセット
+  useEffect(() => {
+    if (showAdd) { setSaving(false); setAddError(''); }
+  }, [showAdd]);
+
   // フィルタリング（テンプレートは通常リストから除外）
   const filtered = tasks.filter((t) => {
     if (t.is_template) return false;
@@ -1907,33 +1912,42 @@ export default function WebLayout() {
   const FILTER_TABS: [FilterKey, string][] = [['all', 'すべて'], ['active', '未完了'], ['done', '完了']];
 
   const handleAdd = async (task: TodoTask) => {
-    setSaving(true);
     setAddError('');
+    setSaving(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { setAddError('ログインが必要です'); setSaving(false); return; }
-      const { error } = await supabase.from('todo_tasks').insert({
-        date: task.date,
-        title: task.title,
-        description: task.description,
-        leverage: task.leverage,
+      const authResult = await supabase.auth.getUser();
+      const user = authResult?.data?.user;
+      if (!user) {
+        setAddError('未ログイン。再度ログインしてください。');
+        setSaving(false);
+        return;
+      }
+      const insertResult = await supabase.from('todo_tasks').insert({
+        date: task.date ?? '',
+        title: task.title ?? '',
+        description: task.description ?? '',
+        leverage: task.leverage ?? '',
         risk: task.risk ?? '',
-        priority: task.priority,
-        status: task.status,
-        achieve_reason: task.achieve_reason,
-        fail_reason: task.fail_reason,
-        due_date: task.due_date,
-        deadline_time: task.deadline_time,
-        estimated_minutes: task.estimated_minutes,
-        progress_notes: task.progress_notes,
+        priority: task.priority ?? 3,
+        status: task.status ?? 'todo',
+        achieve_reason: task.achieve_reason ?? '',
+        fail_reason: task.fail_reason ?? '',
+        due_date: task.due_date ?? null,
+        deadline_time: task.deadline_time ?? null,
+        estimated_minutes: task.estimated_minutes ?? null,
+        progress_notes: task.progress_notes ?? '',
         category: task.category ?? 'その他',
         user_id: user.id,
       });
-      if (error) { setAddError(error.message); setSaving(false); return; }
+      if (insertResult.error) {
+        setAddError('保存失敗: ' + insertResult.error.message);
+        setSaving(false);
+        return;
+      }
       setShowAdd(false);
-      loadTasks();
+      await loadTasks();
     } catch (e: any) {
-      setAddError(e?.message ?? '不明なエラー');
+      setAddError('エラー: ' + (e?.message ?? String(e)));
     }
     setSaving(false);
   };
