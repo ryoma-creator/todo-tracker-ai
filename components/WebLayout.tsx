@@ -623,7 +623,7 @@ function DetailPanel({ task, onClose, onSave, onOpenModal, onDelete, onDuplicate
 
           {/* モーダルで詳細編集 */}
           <TouchableOpacity style={dp.modalEditBtn} onPress={onOpenModal}>
-            <Text style={dp.modalEditTxt}>⛶ 全画面編集</Text>
+            <Text style={dp.modalEditTxt}>✏️ 編集</Text>
           </TouchableOpacity>
 
           {/* 削除 */}
@@ -1953,14 +1953,23 @@ export default function WebLayout() {
   };
 
   const updateTask = async (task: TodoTask) => {
-    await supabase.from('todo_tasks').update({
-      title: task.title, description: task.description, leverage: task.leverage,
-      priority: task.priority, status: task.status,
-      achieve_reason: task.achieve_reason, fail_reason: task.fail_reason,
-      due_date: task.due_date, deadline_time: task.deadline_time,
-      estimated_minutes: task.estimated_minutes, progress_notes: task.progress_notes,
-      category: task.category ?? 'その他', actual_minutes: task.actual_minutes ?? null,
+    const { error } = await supabase.from('todo_tasks').update({
+      title: task.title ?? '',
+      description: task.description ?? '',
+      leverage: task.leverage ?? '',
+      risk: task.risk ?? '',
+      priority: task.priority ?? 3,
+      status: task.status ?? 'todo',
+      achieve_reason: task.achieve_reason ?? '',
+      fail_reason: task.fail_reason ?? '',
+      due_date: task.due_date ?? null,
+      deadline_time: task.deadline_time ?? null,
+      estimated_minutes: task.estimated_minutes ?? null,
+      progress_notes: task.progress_notes ?? '',
+      category: task.category ?? 'その他',
+      actual_minutes: task.actual_minutes ?? null,
     }).eq('id', task.id as string);
+    return error;
   };
 
   // インライン保存（右パネルから）
@@ -1973,10 +1982,11 @@ export default function WebLayout() {
   // モーダル編集保存
   const handleEdit = async (task: TodoTask) => {
     setSaving(true);
-    await updateTask(task);
+    const error = await updateTask(task);
+    if (error) { setSaving(false); return; }
     setEditTarget(null);
-    setSelected(task); // 保存後もパネルを開いたまま
-    loadTasks();
+    setSelected(task);
+    await loadTasks();
     setSaving(false);
   };
 
@@ -2286,8 +2296,8 @@ const dp = StyleSheet.create({
   savedIndicator: { flex: 1, alignItems: 'center', paddingVertical: 11 },
   savedTxt: { color: '#16A34A', fontSize: 13, fontWeight: '600' },
   actionRight: { flexDirection: 'row', gap: 6, alignItems: 'center' },
-  modalEditBtn: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9 },
-  modalEditTxt: { color: C.sub, fontSize: 12, fontWeight: '600' },
+  modalEditBtn: { backgroundColor: '#EFF6FF', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderColor: '#BFDBFE' },
+  modalEditTxt: { color: '#2563EB', fontSize: 12, fontWeight: '700' },
   catBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 5, paddingHorizontal: 10, borderRadius: 20, borderWidth: 1.5, borderColor: C.border, backgroundColor: '#F9FAFB' },
   catDot: { width: 5, height: 5, borderRadius: 3 },
   catTxt: { fontSize: 11, color: C.muted, fontWeight: '500' },
