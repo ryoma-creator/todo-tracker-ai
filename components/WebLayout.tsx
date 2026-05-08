@@ -1843,6 +1843,7 @@ export default function WebLayout() {
   const [showAdd, setShowAdd] = useState(false);
   const [editTarget, setEditTarget] = useState<TodoTask | null>(null);
   const [saving, setSaving] = useState(false);
+  const [addError, setAddError] = useState('');
   const [userEmail, setUserEmail] = useState('');
 
   const todayStr = localDateStr();
@@ -1907,28 +1908,33 @@ export default function WebLayout() {
 
   const handleAdd = async (task: TodoTask) => {
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setSaving(false); return; }
-    const { error } = await supabase.from('todo_tasks').insert({
-      date: task.date,
-      title: task.title,
-      description: task.description,
-      leverage: task.leverage,
-      risk: task.risk ?? '',
-      priority: task.priority,
-      status: task.status,
-      achieve_reason: task.achieve_reason,
-      fail_reason: task.fail_reason,
-      due_date: task.due_date,
-      deadline_time: task.deadline_time,
-      estimated_minutes: task.estimated_minutes,
-      progress_notes: task.progress_notes,
-      category: task.category ?? 'その他',
-      user_id: user.id,
-    });
-    if (error) { console.error('insert error:', error.message); setSaving(false); return; }
-    setShowAdd(false);
-    loadTasks();
+    setAddError('');
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setAddError('ログインが必要です'); setSaving(false); return; }
+      const { error } = await supabase.from('todo_tasks').insert({
+        date: task.date,
+        title: task.title,
+        description: task.description,
+        leverage: task.leverage,
+        risk: task.risk ?? '',
+        priority: task.priority,
+        status: task.status,
+        achieve_reason: task.achieve_reason,
+        fail_reason: task.fail_reason,
+        due_date: task.due_date,
+        deadline_time: task.deadline_time,
+        estimated_minutes: task.estimated_minutes,
+        progress_notes: task.progress_notes,
+        category: task.category ?? 'その他',
+        user_id: user.id,
+      });
+      if (error) { setAddError(error.message); setSaving(false); return; }
+      setShowAdd(false);
+      loadTasks();
+    } catch (e: any) {
+      setAddError(e?.message ?? '不明なエラー');
+    }
     setSaving(false);
   };
 
@@ -2132,6 +2138,11 @@ export default function WebLayout() {
                 <Text style={w.modalXTxt}>✕</Text>
               </TouchableOpacity>
             </View>
+            {addError ? (
+              <View style={{ backgroundColor: '#FEE2E2', borderRadius: 8, padding: 10, margin: 12 }}>
+                <Text style={{ color: '#DC2626', fontSize: 13 }}>⚠️ {addError}</Text>
+              </View>
+            ) : null}
             <TaskForm initial={{ date: todayStr }} onSave={handleAdd} saving={saving} onCancel={() => setShowAdd(false)} />
           </View>
         </View>
